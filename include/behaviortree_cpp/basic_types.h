@@ -83,60 +83,71 @@ inline T convertFromString(StringView /*str*/)
                    type_name);
 }
 
-template <>
+template <> [[nodiscard]]
 std::string convertFromString<std::string>(StringView str);
 
-template <>
+template <> [[nodiscard]]
 const char* convertFromString<const char*>(StringView str);
 
-template <>
+template <> [[nodiscard]]
 int convertFromString<int>(StringView str);
 
-template <>
+template <> [[nodiscard]]
 unsigned convertFromString<unsigned>(StringView str);
 
-template <>
+template <> [[nodiscard]]
 long convertFromString<long>(StringView str);
 
-template <>
+template <> [[nodiscard]]
 unsigned long convertFromString<unsigned long>(StringView str);
 
-template <>
+template <> [[nodiscard]]
 float convertFromString<float>(StringView str);
 
-template <>
+template <> [[nodiscard]]
 double convertFromString<double>(StringView str);
 
-template <>   // Integer numbers separated by the character ";"
+// Integer numbers separated by the character ";"
+template <> [[nodiscard]]
 std::vector<int> convertFromString<std::vector<int>>(StringView str);
 
-template <>   // Real numbers separated by the character ";"
+// Real numbers separated by the character ";"
+template <> [[nodiscard]]
 std::vector<double> convertFromString<std::vector<double>>(StringView str);
 
-template <>   // This recognizes either 0/1, true/false, TRUE/FALSE
+// This recognizes either 0/1, true/false, TRUE/FALSE
+template <> [[nodiscard]]
 bool convertFromString<bool>(StringView str);
 
-template <>   // Names with all capital letters
+// Names with all capital letters
+template <> [[nodiscard]]
 NodeStatus convertFromString<NodeStatus>(StringView str);
 
-template <>   // Names with all capital letters
+// Names with all capital letters
+template <> [[nodiscard]]
 NodeType convertFromString<NodeType>(StringView str);
 
-template <>
+template <> [[nodiscard]]
 PortDirection convertFromString<PortDirection>(StringView str);
 
-typedef std::function<Any(StringView)> StringConverter;
+using StringConverter = std::function<Any(StringView)>;
 
-typedef std::unordered_map<const std::type_info*, StringConverter> StringConvertersMap;
+using StringConvertersMap = std::unordered_map<const std::type_info*, StringConverter>;
 
 // helper function
-template <typename T>
+template <typename T> [[nodiscard]]
 inline StringConverter GetAnyFromStringFunctor()
 {
-  return [](StringView str) { return Any(convertFromString<T>(str)); };
+  if constexpr(std::is_constructible_v<StringView, T>)
+  {
+    return [](StringView str) { return Any(str); };
+  }
+  else {
+    return [](StringView str) { return Any(convertFromString<T>(str)); };
+  }
 }
 
-template <>
+template <> [[nodiscard]]
 inline StringConverter GetAnyFromStringFunctor<void>()
 {
   return {};
@@ -144,34 +155,46 @@ inline StringConverter GetAnyFromStringFunctor<void>()
 
 //------------------------------------------------------------------
 
-template <typename T> [[nodiscard]]
-std::string toStr(T value)
+template<typename T> [[nodiscard]]
+std::string toStr(const T& value)
 {
-  return std::to_string(value);
+  if constexpr(!std::is_arithmetic_v<T>)
+  {
+    throw LogicError(
+        StrCat("Function BT::toStr<T>() not specialized for type [",
+               BT::demangle(typeid(T)), "],",
+               "Implement it consistently with BT::convertFromString<T>(), "
+               "or provide at dummy version that returns an empty string.")
+      );
+  } else {
+    return std::to_string(value);
+  }
 }
 
-std::string toStr(const std::string& value);
+template <> [[nodiscard]]
+std::string toStr<bool>(const bool& value);
 
-template <>
-std::string toStr<BT::NodeStatus>(BT::NodeStatus status);
+template <> [[nodiscard]]
+std::string toStr<std::string>(const std::string& value);
+
+template <> [[nodiscard]]
+std::string toStr<BT::NodeStatus>(const BT::NodeStatus& status);
 
 /**
  * @brief toStr converts NodeStatus to string. Optionally colored.
  */
+[[nodiscard]]
 std::string toStr(BT::NodeStatus status, bool colored);
 
 std::ostream& operator<<(std::ostream& os, const BT::NodeStatus& status);
 
-/**
- * @brief toStr converts NodeType to string.
- */
 template <> [[nodiscard]]
-std::string toStr<BT::NodeType>(BT::NodeType type);
+std::string toStr<BT::NodeType>(const BT::NodeType& type);
 
 std::ostream& operator<<(std::ostream& os, const BT::NodeType& type);
 
 template <> [[nodiscard]]
-std::string toStr<BT::PortDirection>(BT::PortDirection direction);
+std::string toStr<BT::PortDirection>(const BT::PortDirection& direction);
 
 std::ostream& operator<<(std::ostream& os, const BT::PortDirection& type);
 
@@ -203,6 +226,7 @@ using enable_if_not = typename std::enable_if<!Predicate::value>::type*;
  * */
 template <typename T>
 using Expected = nonstd::expected<T, std::string>;
+
 #ifdef USE_BTCPP3_OLD_NAMES
 // note: we also use the name Optional instead of expected because it is more intuitive
 // for users that are not up to date with "modern" C++
@@ -239,11 +263,11 @@ public:
   };
 
   PortInfo(PortDirection direction = PortDirection::INOUT) :
-    _type(direction), _type_info(typeid(AnyTypeAllowed))
+    type_(direction), type_info_(typeid(AnyTypeAllowed))
   {}
 
   PortInfo(PortDirection direction, std::type_index type_info, StringConverter conv) :
-    _type(direction), _type_info(type_info), _converter(conv)
+    type_(direction), type_info_(type_info), converter_(conv)
   {}
 
   [[nodiscard]] PortDirection direction() const;
@@ -263,28 +287,38 @@ public:
 
   void setDescription(StringView description);
 
-  void setDefaultValue(StringView default_value_as_string);
+  template <typename T>
+  void setDefaultValue(const T& default_value) {
+    default_value_ = Any(default_value);
+    try{
+      default_value_str_ = BT::toStr(default_value);
+    }
+    catch(LogicError&) {}
+  }
 
   [[nodiscard]] const std::string& description() const;
 
-  [[nodiscard]] std::optional<std::string> defaultValue() const;
+  [[nodiscard]] const Any& defaultValue() const;
+
+  [[nodiscard]] const std::string& defaultValueString() const;
 
   [[nodiscard]] bool isStronglyTyped() const
   {
-    return _type_info != typeid(AnyTypeAllowed);
+    return type_info_ != typeid(AnyTypeAllowed);
   }
 
   [[nodiscard]] const StringConverter& converter() const
   {
-    return _converter;
+    return converter_;
   }
 
 private:
-  PortDirection _type;
-  std::type_index _type_info;
-  StringConverter _converter;
+  PortDirection type_;
+  std::type_index type_info_;
+  StringConverter converter_;
   std::string description_;
-  std::optional<std::string> default_value_;
+  Any default_value_;
+  std::string default_value_str_;
 };
 
 template <typename T = PortInfo::AnyTypeAllowed> [[nodiscard]]
@@ -344,7 +378,7 @@ inline std::pair<std::string, PortInfo> InputPort(StringView name, const T& defa
                                                   StringView description)
 {
   auto out = CreatePort<T>(PortDirection::INPUT, name, description);
-  out.second.setDefaultValue(BT::toStr(default_value));
+  out.second.setDefaultValue(default_value);
   return out;
 }
 
@@ -354,12 +388,12 @@ inline std::pair<std::string, PortInfo> BidirectionalPort(StringView name,
                                                           StringView description)
 {
   auto out = CreatePort<T>(PortDirection::INOUT, name, description);
-  out.second.setDefaultValue(BT::toStr(default_value));
+  out.second.setDefaultValue(default_value);
   return out;
 }
 //----------
 
-typedef std::unordered_map<std::string, PortInfo> PortsList;
+using PortsList = std::unordered_map<std::string, PortInfo>;
 
 template <typename T, typename = void>
 struct has_static_method_providedPorts : std::false_type
@@ -387,8 +421,8 @@ inline PortsList
   return {};
 }
 
-typedef std::chrono::high_resolution_clock::time_point TimePoint;
-typedef std::chrono::high_resolution_clock::duration Duration;
+using TimePoint = std::chrono::high_resolution_clock::time_point;
+using Duration = std::chrono::high_resolution_clock::duration;
 
 }   // namespace BT
 
