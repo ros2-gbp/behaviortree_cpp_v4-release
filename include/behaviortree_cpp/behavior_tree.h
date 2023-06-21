@@ -35,9 +35,11 @@
 
 #include "behaviortree_cpp/actions/always_success_node.h"
 #include "behaviortree_cpp/actions/always_failure_node.h"
+#include "behaviortree_cpp/actions/script_condition.h"
 #include "behaviortree_cpp/actions/script_node.h"
 #include "behaviortree_cpp/actions/set_blackboard_node.h"
 #include "behaviortree_cpp/actions/test_node.h"
+#include "behaviortree_cpp/actions/sleep_node.h"
 
 #include "behaviortree_cpp/decorators/force_success_node.h"
 #include "behaviortree_cpp/decorators/force_failure_node.h"
@@ -63,7 +65,7 @@ void applyRecursiveVisitor(TreeNode* root_node,
  */
 void printTreeRecursively(const TreeNode* root_node, std::ostream& stream = std::cout);
 
-typedef std::vector<std::pair<uint16_t, uint8_t>> SerializedTreeStatus;
+using SerializedTreeStatus = std::vector<std::pair<uint16_t, uint8_t>>;
 
 /**
  * @brief buildSerializedStatusSnapshot can be used to create a buffer that can be stored
