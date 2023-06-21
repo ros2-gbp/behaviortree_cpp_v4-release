@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16.3) # version on Ubuntu Focal
 
-project(behaviortree_cpp VERSION 4.2.0 LANGUAGES C CXX)
+project(behaviortree_cpp VERSION 4.3.1 LANGUAGES C CXX)
 
 set(CMAKE_CONFIG_PATH ${CMAKE_MODULE_PATH}  "${CMAKE_CURRENT_LIST_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CONFIG_PATH}")
@@ -101,6 +101,7 @@ list(APPEND BT_SOURCE
     src/xml_parsing.cpp
 
     src/actions/test_node.cpp
+    src/actions/sleep_node.cpp
 
     src/decorators/inverter_node.cpp
     src/decorators/repeat_node.cpp
