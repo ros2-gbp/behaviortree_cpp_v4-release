@@ -5,17 +5,19 @@
 namespace BT {
 
 SqliteLogger::SqliteLogger(const Tree &tree,
-                           std::filesystem::path const& file,
+                           std::filesystem::path const& filepath,
                            bool append):
   StatusChangeLogger(tree.rootNode())
 {
+  const auto extension = filepath.filename().extension();
+  if( extension!= ".db3" && extension != ".btdb")
+  {
+    throw RuntimeError("SqliteLogger: the file extension must be [.db3] or [.btdb]");
+  }
+
   enableTransitionToIdle(true);
 
-  db_ = std::make_unique<sqlite::Connection>(file.string());
-
-  sqlite::Statement(*db_, "PRAGMA journal_mode=WAL;");
-  sqlite::Statement(*db_, "PRAGMA synchronous = normal;");
-  sqlite::Statement(*db_, "PRAGMA temp_store = memory;");
+  db_ = std::make_unique<sqlite::Connection>(filepath.string());
 
   sqlite::Statement(*db_,
                     "CREATE TABLE IF NOT EXISTS Transitions ("
@@ -37,7 +39,7 @@ SqliteLogger::SqliteLogger(const Tree &tree,
     sqlite::Statement(*db_, "DELETE from Definitions;");
   }
 
-  auto tree_xml = WriteTreeToXML(tree, true);
+  auto tree_xml = WriteTreeToXML(tree, true, true);
   sqlite::Statement(*db_,
                     "INSERT into Definitions (date, xml_tree) "
                     "VALUES (datetime('now','localtime'),?);",
