@@ -78,7 +78,7 @@ public:
 class SimpleActionNode : public SyncActionNode
 {
 public:
-  typedef std::function<NodeStatus(TreeNode&)> TickFunctor;
+  using TickFunctor = std::function<NodeStatus(TreeNode&)>;
 
   // You must provide the function to call when tick() is invoked
   SimpleActionNode(const std::string& name, TickFunctor tick_functor,
@@ -204,6 +204,7 @@ public:
   // This method triggers the TickEngine. Do NOT remove the "final" keyword.
   virtual NodeStatus executeTick() override final;
 
+  // Used internally, but it needs to be public
   void tickImpl();
 
   /** You may want to override this method. But still, remember to call this
