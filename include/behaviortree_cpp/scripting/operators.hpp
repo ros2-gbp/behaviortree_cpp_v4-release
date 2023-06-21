@@ -71,7 +71,7 @@ struct ExprName : ExprBase
         auto any_ref = env.vars->getAnyLocked(name);
         if( !any_ref )
         {
-          throw std::runtime_error("Variable not found");
+          throw RuntimeError(StrCat("Variable not found: ", name));
         }
         return *any_ref.get();
     }
@@ -359,18 +359,23 @@ struct ExprAssignment : ExprBase
         }
         const auto& key = varname->name;
 
-        Blackboard::Entry* entry = env.vars->getEntry(key);
+        auto entry = env.vars->getEntry(key);
         if( !entry )
         {
             // variable doesn't exist, create it if using operator assign_create
             if(op == assign_create)
             {
-                env.vars->setPortInfo(key, PortInfo());
+                env.vars->createEntry(key, PortInfo());
                 entry = env.vars->getEntry(key);
             }
             else {
                 // fail otherwise
-                throw std::runtime_error("Can't create a new variable");
+                char buffer[1014];
+                sprintf(buffer,
+                        "The blackboard entry [%s] doesn't exist, yet.\n"
+                        "If you want to create a new one, use the operator "
+                        "[:=] instead of [=]", key.c_str());
+                throw std::runtime_error(buffer);
             }
         }
         auto value = rhs->evaluate(env);
