@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16.3) # version on Ubuntu Focal
 
-project(behaviortree_cpp VERSION 4.3.1 LANGUAGES C CXX)
+project(behaviortree_cpp VERSION 4.3.3 LANGUAGES C CXX)
 
 set(CMAKE_CONFIG_PATH ${CMAKE_MODULE_PATH}  "${CMAKE_CURRENT_LIST_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CONFIG_PATH}")
@@ -25,8 +25,6 @@ if(MSVC)
 else()
     add_definitions(-Wpedantic)
 endif()
-
-#set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 #---- project configuration ----
 option(BTCPP_SHARED_LIBS "Build shared libraries" ON)
@@ -112,6 +110,7 @@ list(APPEND BT_SOURCE
     src/controls/if_then_else_node.cpp
     src/controls/fallback_node.cpp
     src/controls/parallel_node.cpp
+    src/controls/parallel_all_node.cpp
     src/controls/reactive_sequence.cpp
     src/controls/reactive_fallback.cpp
     src/controls/sequence_node.cpp
@@ -153,6 +152,7 @@ if (BTCPP_SHARED_LIBS)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
     add_library(${BTCPP_LIBRARY} SHARED ${BT_SOURCE})
 else()
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     add_library(${BTCPP_LIBRARY} STATIC ${BT_SOURCE})
 endif()
 
