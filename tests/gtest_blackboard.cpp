@@ -360,3 +360,104 @@ TEST(BlackboardTest, SetStringView)
 
   ASSERT_NO_THROW(bb->set("string_view", string_view_const));
 }
+
+TEST(ParserTest, Issue605_whitespaces)
+{
+  BT::BehaviorTreeFactory factory;
+
+  const std::string xml_text = R"(
+  <root BTCPP_format="4" >
+    <BehaviorTree ID="MySubtree">
+      <Script code=" sub_value:=false " />
+    </BehaviorTree>
+
+    <BehaviorTree ID="MainTree">
+      <Sequence>
+        <Script code=" my_value:=true " />
+        <SubTree ID="MySubtree" sub_value="{my_value}  "/>
+      </Sequence>
+    </BehaviorTree>
+  </root> )";
+
+  factory.registerBehaviorTreeFromText(xml_text);
+  auto tree = factory.createTree("MainTree");
+  const auto status = tree.tickWhileRunning();
+
+  for(auto const& subtree: tree.subtrees)
+  {
+    subtree->blackboard->debugMessage();
+  }
+
+  ASSERT_EQ(status, BT::NodeStatus::SUCCESS);
+  ASSERT_EQ(false, tree.rootBlackboard()->get<bool>("my_value"));
+}
+
+
+class ComparisonNode : public BT::ConditionNode
+{
+public:
+
+  ComparisonNode(const std::string& name, const BT::NodeConfiguration& config):
+    BT::ConditionNode(name, config) {}
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<int32_t>("first"),
+            BT::InputPort<int32_t>("second"),
+            BT::InputPort<std::string>("operator")};
+  }
+
+  BT::NodeStatus tick() override
+  {
+    int32_t firstValue = 0;
+    int32_t secondValue = 0;
+    std::string inputOperator;
+    if (!getInput("first", firstValue) ||
+        !getInput("second", secondValue) ||
+        !getInput("operator", inputOperator))
+    {
+      throw RuntimeError("can't access input");
+    }
+    if( (inputOperator == "==" && firstValue == secondValue) ||
+        (inputOperator == "!=" && firstValue != secondValue) ||
+        (inputOperator == "<=" && firstValue <= secondValue) ||
+        (inputOperator == ">=" && firstValue <= secondValue) ||
+        (inputOperator == "<" && firstValue < secondValue) ||
+        (inputOperator == ">" && firstValue < secondValue) )
+    {
+      return BT::NodeStatus::SUCCESS;
+    }
+    // skipping the rest of the implementation
+    return BT::NodeStatus::FAILURE;
+  }
+};
+
+TEST(BlackboardTest, IssueSetBlackboard)
+{
+  BT::BehaviorTreeFactory factory;
+
+  const std::string xml_text = R"(
+  <root BTCPP_format="4" >
+    <BehaviorTree ID="MySubtree">
+      <ComparisonNode first="{value}" second="42" operator="==" />
+    </BehaviorTree>
+
+    <BehaviorTree ID="MainTree">
+      <Sequence>
+        <SetBlackboard value="42" output_key="value" />
+        <SubTree ID="MySubtree" value="{value}  "/>
+      </Sequence>
+    </BehaviorTree>
+  </root> )";
+
+  factory.registerNodeType<ComparisonNode>("ComparisonNode");
+  factory.registerBehaviorTreeFromText(xml_text);
+  auto tree = factory.createTree("MainTree");
+  const auto status = tree.tickWhileRunning();
+
+  ASSERT_EQ(status, BT::NodeStatus::SUCCESS);
+  ASSERT_EQ(42, tree.rootBlackboard()->get<int>("value"));
+}
+
+
+
