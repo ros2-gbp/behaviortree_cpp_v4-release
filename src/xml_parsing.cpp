@@ -96,6 +96,17 @@ struct XMLParser::PImpl
 XMLParser::XMLParser(const BehaviorTreeFactory& factory) : _p(new PImpl(factory))
 {}
 
+XMLParser::XMLParser(XMLParser &&other) noexcept
+{
+  this->_p = std::move(other._p);
+}
+
+XMLParser &XMLParser::operator=(XMLParser &&other) noexcept
+{
+  this->_p = std::move(other._p);
+  return *this;
+}
+
 XMLParser::~XMLParser()
 {}
 
@@ -898,7 +909,9 @@ void addNodeModelToXML(const TreeNodeManifest& model,
 
   if (!model.description.empty())
   {
-    element->SetAttribute("description", model.registration_ID.c_str());
+    auto description_element = doc.NewElement("description");
+    description_element->SetText(model.description.c_str());
+    element->InsertEndChild(description_element);
   }
 
   model_root->InsertEndChild(element);
