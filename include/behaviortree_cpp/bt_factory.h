@@ -44,7 +44,13 @@ template <typename T>
 inline TreeNodeManifest CreateManifest(const std::string& ID,
                                        PortsList portlist = getProvidedPorts<T>())
 {
-  return {getType<T>(), ID, portlist, {}};
+  if constexpr( has_static_method_description<T>::value)
+  {
+    return {getType<T>(), ID, portlist, T::description()};
+  }
+  else {
+    return {getType<T>(), ID, portlist, {}};
+  }
 }
 
 #ifdef BT_PLUGIN_EXPORT
@@ -204,8 +210,8 @@ public:
   BehaviorTreeFactory(const BehaviorTreeFactory& other) = delete;
   BehaviorTreeFactory& operator=(const BehaviorTreeFactory& other) = delete;
 
-  BehaviorTreeFactory(BehaviorTreeFactory&& other) = default;
-  BehaviorTreeFactory& operator=(BehaviorTreeFactory&& other)  = default;
+  BehaviorTreeFactory(BehaviorTreeFactory&& other) noexcept;
+  BehaviorTreeFactory& operator=(BehaviorTreeFactory&& other) noexcept;
 
   /// Remove a registered ID.
   bool unregisterBuilder(const std::string& ID);

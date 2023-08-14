@@ -67,7 +67,7 @@ BehaviorTreeFactory::BehaviorTreeFactory():
   registerNodeType<RetryNode>("RetryUntilSuccessful");
   registerNodeType<KeepRunningUntilFailureNode>("KeepRunningUntilFailure");
   registerNodeType<RepeatNode>("Repeat");
-  registerNodeType<TimeoutNode<>>("Timeout");
+  registerNodeType<TimeoutNode>("Timeout");
   registerNodeType<DelayNode>("Delay");
   registerNodeType<RunOnceNode>("RunOnce");
 
@@ -91,6 +91,8 @@ BehaviorTreeFactory::BehaviorTreeFactory():
   registerNodeType<SwitchNode<5>>("Switch5");
   registerNodeType<SwitchNode<6>>("Switch6");
   
+  registerNodeType<LoopNode<int>>("LoopInt");
+  registerNodeType<LoopNode<bool>>("LoopBool");
   registerNodeType<LoopNode<double>>("LoopDouble");
   registerNodeType<LoopNode<std::string>>("LoopString");
 
@@ -100,6 +102,17 @@ BehaviorTreeFactory::BehaviorTreeFactory():
   }
 
   _p->scripting_enums = std::make_shared<std::unordered_map<std::string, int>>();
+}
+
+BehaviorTreeFactory::BehaviorTreeFactory(BehaviorTreeFactory &&other) noexcept
+{
+  this->_p = std::move(other._p);
+}
+
+BehaviorTreeFactory &BehaviorTreeFactory::operator=(BehaviorTreeFactory &&other) noexcept
+{
+  this->_p = std::move(other._p);
+  return *this;
 }
 
 BehaviorTreeFactory::~BehaviorTreeFactory()
