@@ -2,6 +2,84 @@
 Changelog for package behaviortree_cpp
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+4.3.5 (2023-08-14)
+------------------
+* fix issue `#621 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/621>`_: ConsumeQueue
+* feat: add template specialization for convertFromString deque (`#628 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/628>`_)
+* unit test added
+* Update groot2_publisher.h (`#630 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/630>`_)
+* unit test issue `#629 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/629>`_
+* WhileDoElseNode can have 2 or 3 children (`#625 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/625>`_)
+* fix issue `#624 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/624>`_ : add TimeoutNode::halt()
+* fix recording_fist_time issue on windows (`#618 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/618>`_)
+* Contributors: Aglargil, Davide Faconti, Michael Terzer, benyamin saedi, muritane
+
+4.3.4 (2023-07-25)
+------------------
+* Fix error #617 in TestNode
+* minitrace updated
+* fix issue #615 : don't execute preconditions if state is RUNNING
+* README.md
+* fix issue `#605 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/605>`_: strip whitespaces and better error message
+* Export cxx-standard with target. (`#604 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/604>`_)
+* feature `#603 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/603>`_: add static method [std::string description()] to manifest
+* fix issue with move semantic
+* Contributors: Davide Faconti, Sebastian Kasperski
+
+4.3.3 (2023-07-05)
+------------------
+* bug fix `#601 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/601>`_: onHalted not called correctly in Control Nodes
+* Groot recording (`#598 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/598>`_)
+  * add recording to groot publisher
+  * fixed
+  * protocols compatibility
+  * reply with first timestamp
+  * remove prints
+* Fix error when building static library (`#599 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/599>`_)
+* fix warnings
+* 4.3.2
+* prepare release
+* fix `#595 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/595>`_ : improvement in blackboard/scripting types (`#597 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/597>`_)
+* Merge branch 'master' of github.com:BehaviorTree/BehaviorTree.CPP
+* Merge branch 'parallel_all'
+* Fix Issue 593 (`#594 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/594>`_): support skipping in Parallel node
+* fix ParallelAll
+* adding ParallelAll, WIP
+* Contributors: Davide Faconti, Oleksandr Perepadia
+
+4.3.2 (2023-06-27)
+------------------
+* fix `#595 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/595>`_ : improvement in blackboard/scripting types (`#597 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/597>`_)
+* Fix Issue 593 (`#594 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/594>`_): support skipping in Parallel node
+* adding ParallelAll
+* Contributors: Davide Faconti
+
+4.3.1 (2023-06-21)
+------------------
+* fix issue `#592 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/592>`_
+* use lambda in tutorial
+* add script condition
+* "fix" issue `#587 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/587>`_: ReactiveSequence should set conditions to IDLE
+* better error message
+* Fix issue `#585 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/585>`_
+* Contributors: Davide Faconti
+
+4.3.0 (2023-06-13)
+------------------
+* use PImpl in multiple classes
+* updated FileLogger2
+* better error messages
+* blackboard refactoring to fix buggy _autoremap
+* improved support for default values
+* fix error and add nodiscard
+* Fix `#580 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/580>`_ : more informative error when not specializing BT::toStr
+* add builtin models to WriteTreeToXML
+* add simple example to generate logs
+* add Sleep Node
+* Fix `#271 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/271>`_: better error message
+* remove EOL ros2 from CI
+* Contributors: Davide Faconti
+
 4.2.1 (2023-06-07)
 ------------------
 * Fix `#570 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/570>`_: string_view set in blackboard

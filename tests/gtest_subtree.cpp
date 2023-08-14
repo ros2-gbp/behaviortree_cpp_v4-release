@@ -2,6 +2,7 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "../sample_nodes/dummy_nodes.h"
 #include "../sample_nodes/movebase_node.h"
+#include "test_helper.hpp"
 
 using namespace BT;
 
@@ -306,6 +307,7 @@ public:
   }
 };
 
+
 TEST(SubTree, StringConversions_Issue530)
 {
   const char* xml_text = R"(
@@ -325,4 +327,135 @@ TEST(SubTree, StringConversions_Issue530)
   factory.registerBehaviorTreeFromText(xml_text);
   Tree tree = factory.createTree("MainTree");
   tree.tickOnce();
+}
+
+class NaughtyNav2Node : public BT::SyncActionNode
+{
+public:
+  NaughtyNav2Node(const std::string& name, const BT::NodeConfiguration& config) :
+    BT::SyncActionNode(name, config)
+  {
+    std::cout << "CTOR:" << config.blackboard->get<std::string>("ros_node") << std::endl;
+  }
+
+  BT::NodeStatus tick() override
+  {
+    std::cout << "tick:" << config().blackboard->get<std::string>("ros_node") << std::endl;
+    return BT::NodeStatus::SUCCESS;
+  }
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+};
+
+TEST(SubTree, SubtreeIssue563)
+{
+  static const char* xml_text = R"(
+<root BTCPP_format="4" >
+
+<BehaviorTree ID="Tree1">
+  <Sequence>
+    <SetBlackboard output_key="the_message" value="hello world"/>
+    <SubTree ID="Tree2" _autoremap="true"/>
+    <SaySomething message="{reply}" />
+  </Sequence>
+</BehaviorTree>
+
+<BehaviorTree ID="Tree2">
+    <SubTree ID="Tree3" _autoremap="true"/>
+</BehaviorTree>
+
+<BehaviorTree ID="Tree3">
+    <SubTree ID="Talker" _autoremap="true"/>
+</BehaviorTree>
+
+<BehaviorTree ID="Talker">
+  <Sequence>
+    <SaySomething message="{the_message}" />
+    <Script code=" reply:='done' "/>
+    <NaughtyNav2Node/>
+  </Sequence>
+</BehaviorTree>
+
+</root>)";
+
+  BehaviorTreeFactory factory;
+  factory.registerNodeType<DummyNodes::SaySomething>("SaySomething");
+  factory.registerNodeType<NaughtyNav2Node>("NaughtyNav2Node");
+
+  factory.registerBehaviorTreeFromText(xml_text);
+
+  auto blackboard = BT::Blackboard::create();
+  blackboard->set<std::string>("ros_node", "nav2_shouldnt_do_this");
+
+  Tree tree = factory.createTree("Tree1", blackboard);
+
+  auto ret = tree.tickOnce();
+  ASSERT_EQ(ret, NodeStatus::SUCCESS);
+}
+
+
+TEST(SubTree, SubtreeIssue592)
+{
+  static const char* xml_text = R"(
+<root BTCPP_format="4" >
+
+  <BehaviorTree ID="Outer_Tree">
+    <Sequence>
+      <Script code="variable := 'test'"/>
+      <Script code="var := 'test'"/>
+      <SubTree ID="Inner_Tree" _autoremap="false" variable="{var}" />
+      <SubTree ID="Inner_Tree" _autoremap="true"/>
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="Inner_Tree">
+    <Sequence>
+      <TestA _skipIf="variable != 'test'"/>
+    </Sequence>
+  </BehaviorTree>
+
+</root>)";
+
+
+  BehaviorTreeFactory factory;
+  std::array<int, 1> counters;
+  RegisterTestTick(factory, "Test", counters);
+
+  factory.registerBehaviorTreeFromText(xml_text);
+  Tree tree = factory.createTree("Outer_Tree");
+
+  auto ret = tree.tickWhileRunning();
+  ASSERT_EQ(ret, NodeStatus::SUCCESS);
+  ASSERT_EQ(counters[0], 2);
+}
+
+TEST(SubTree, Issue623_String_to_Pose2d)
+{
+  // clang-format off
+
+  static const char* xml_text = R"(
+<root main_tree_to_execute="Test" BTCPP_format="4">
+
+  <BehaviorTree ID="Test">
+    <ReactiveSequence name="MainSequence">
+      <SubTree name="Visit2" ID="Visit2" tl1="1;2;3"/>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="Visit2">
+    <Sequence name="Visit2MainSequence">
+      <Action name="MoveBase" ID="MoveBase" goal="{tl1}"/>
+    </Sequence>
+  </BehaviorTree>
+</root>
+ )";
+
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+  factory.registerNodeType<MoveBaseAction>("MoveBase");
+  auto tree = factory.createTreeFromText(xml_text);
+  tree.tickWhileRunning();
 }

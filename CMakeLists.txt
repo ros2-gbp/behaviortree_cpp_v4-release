@@ -1,15 +1,11 @@
 cmake_minimum_required(VERSION 3.16.3) # version on Ubuntu Focal
 
-project(behaviortree_cpp VERSION 4.2.0 LANGUAGES C CXX)
+project(behaviortree_cpp VERSION 4.3.5 LANGUAGES C CXX)
 
 set(CMAKE_CONFIG_PATH ${CMAKE_MODULE_PATH}  "${CMAKE_CURRENT_LIST_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CONFIG_PATH}")
 
 set(BTCPP_LIBRARY ${PROJECT_NAME})
-
-#---- Enable C++17 ----
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "Setting build type to 'Release' as none was specified.")
@@ -25,8 +21,6 @@ if(MSVC)
 else()
     add_definitions(-Wpedantic)
 endif()
-
-#set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 #---- project configuration ----
 option(BTCPP_SHARED_LIBS "Build shared libraries" ON)
@@ -101,16 +95,19 @@ list(APPEND BT_SOURCE
     src/xml_parsing.cpp
 
     src/actions/test_node.cpp
+    src/actions/sleep_node.cpp
 
+    src/decorators/delay_node.cpp
     src/decorators/inverter_node.cpp
     src/decorators/repeat_node.cpp
     src/decorators/retry_node.cpp
+    src/decorators/timeout_node.cpp
     src/decorators/subtree_node.cpp
-    src/decorators/delay_node.cpp
 
     src/controls/if_then_else_node.cpp
     src/controls/fallback_node.cpp
     src/controls/parallel_node.cpp
+    src/controls/parallel_all_node.cpp
     src/controls/reactive_sequence.cpp
     src/controls/reactive_fallback.cpp
     src/controls/sequence_node.cpp
@@ -152,6 +149,7 @@ if (BTCPP_SHARED_LIBS)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
     add_library(${BTCPP_LIBRARY} SHARED ${BT_SOURCE})
 else()
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     add_library(${BTCPP_LIBRARY} STATIC ${BT_SOURCE})
 endif()
 
@@ -177,6 +175,8 @@ target_include_directories(${BTCPP_LIBRARY}
 
 target_compile_definitions(${BTCPP_LIBRARY} PRIVATE $<$<CONFIG:Debug>:TINYXML2_DEBUG>)
 target_compile_definitions(${BTCPP_LIBRARY} PUBLIC BTCPP_LIBRARY_VERSION="${CMAKE_PROJECT_VERSION}")
+
+target_compile_features(${BTCPP_LIBRARY} PUBLIC cxx_std_17)
 
 if(MSVC)
 else()
