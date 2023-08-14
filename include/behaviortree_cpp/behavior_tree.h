@@ -1,5 +1,5 @@
 /* Copyright (C) 2015-2018 Michele Colledanchise -  All Rights Reserved
- * Copyright (C) 2018-2022 Davide Faconti -  All Rights Reserved
+ * Copyright (C) 2018-2023 Davide Faconti -  All Rights Reserved
 *
 *   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
 *   to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -14,6 +14,7 @@
 #pragma once
 
 #include "behaviortree_cpp/controls/parallel_node.h"
+#include "behaviortree_cpp/controls/parallel_all_node.h"
 #include "behaviortree_cpp/controls/reactive_sequence.h"
 #include "behaviortree_cpp/controls/reactive_fallback.h"
 #include "behaviortree_cpp/controls/fallback_node.h"
@@ -35,9 +36,11 @@
 
 #include "behaviortree_cpp/actions/always_success_node.h"
 #include "behaviortree_cpp/actions/always_failure_node.h"
+#include "behaviortree_cpp/actions/script_condition.h"
 #include "behaviortree_cpp/actions/script_node.h"
 #include "behaviortree_cpp/actions/set_blackboard_node.h"
 #include "behaviortree_cpp/actions/test_node.h"
+#include "behaviortree_cpp/actions/sleep_node.h"
 
 #include "behaviortree_cpp/decorators/force_success_node.h"
 #include "behaviortree_cpp/decorators/force_failure_node.h"
@@ -63,7 +66,7 @@ void applyRecursiveVisitor(TreeNode* root_node,
  */
 void printTreeRecursively(const TreeNode* root_node, std::ostream& stream = std::cout);
 
-typedef std::vector<std::pair<uint16_t, uint8_t>> SerializedTreeStatus;
+using SerializedTreeStatus = std::vector<std::pair<uint16_t, uint8_t>>;
 
 /**
  * @brief buildSerializedStatusSnapshot can be used to create a buffer that can be stored

@@ -1,11 +1,11 @@
 ![License MIT](https://img.shields.io/github/license/BehaviorTree/BehaviorTree.CPP?color=blue)
-![Version](https://img.shields.io/badge/version-4.2-blue.svg)
+![Version](https://img.shields.io/badge/version-4.3-blue.svg)
 [![conan Ubuntu](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/cmake_ubuntu.yml/badge.svg)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/cmake_ubuntu.yml)
 [![conan Windows](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/cmake_windows.yml/badge.svg)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/cmake_windows.yml)
 [![ros1](https://github.com/BehaviorTree/BehaviorTree.CPP/workflows/ros1/badge.svg?branch=master)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions?query=workflow%3Aros1)
 [![ros2](https://github.com/BehaviorTree/BehaviorTree.CPP/workflows/ros2/badge.svg?branch=master)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions?query=workflow%3Aros2)
 
-# BehaviorTree.CPP 4.2
+# BehaviorTree.CPP 4.3
 
 <p align="center"><img width=350 src="animated.svg"></p>
 
@@ -37,7 +37,7 @@ to visualize, record, replay and analyze state transitions.
 You can learn about the main concepts, the API and the tutorials here: https://www.behaviortree.dev/
 
 If the documentation doesn't answer your questions and/or you want to
-connect with the other **BT.CPP** users, visit https://discourse.behaviortree.dev/
+connect with the other **BT.CPP** users, visit [our forum](https://github.com/BehaviorTree/BehaviorTree.CPP/discussions)
 
 ## Previous version
 
@@ -49,7 +49,7 @@ only in the master branch.
 
 # GUI Editor
 
-Editing a BehaviorTree is as simple as editing a XML file in your favourite text editor.
+Editing a BehaviorTree is as simple as editing an XML file in your favorite text editor.
 
 If you are looking for a more fancy graphical user interface (and I know you do) check
 [Groot2](https://www.behaviortree.dev/groot) out.
@@ -65,7 +65,7 @@ Three build systems are supported:
 - **catkin**, if you use ROS
 - **colcon (ament)**, if you use ROS2
 - **conan** otherwise (Linux/Windows).
-- **straight cmake** if you want to be personal responsible for depndencies :)
+- **straight cmake** if you want to be personally responsible for dependencies :)
 
 Compiling with [conan](https://conan.io/):
 
@@ -92,18 +92,18 @@ example here: https://github.com/BehaviorTree/btcpp_sample .
 
 # Commercial support
 
-Are you using BT.CPP in your commercial product and you need technical support / consulting?
-You can contact the main author dfaconti@aurynrobotics.com to discuss your use case and needs.
+Are you using BT.CPP in your commercial product and do you need technical support / consulting?
+You can contact the primary author, **dfaconti@aurynrobotics.com**, to discuss your use case and needs.
 
 # License
 
 The MIT License (MIT)
 
-Copyright (c) 2014-2018 Michele Colledanchise
+Copyright (c) 2019-2023 Davide Faconti
 
 Copyright (c) 2018-2019 Davide Faconti, Eurecat
 
-Copyright (c) 2019-2023 Davide Faconti
+Copyright (c) 2014-2018 Michele Colledanchise
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

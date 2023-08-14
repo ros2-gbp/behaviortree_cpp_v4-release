@@ -28,7 +28,7 @@ class Blackboard
 {
 
 public:
-  typedef std::shared_ptr<Blackboard> Ptr;
+  using Ptr = std::shared_ptr<Blackboard>;
 
 protected:
   // This is intentionally protected. Use Blackboard::create instead
@@ -61,61 +61,21 @@ public:
 
   virtual ~Blackboard() = default;
 
-  [[nodiscard]] const Entry* getEntry(const std::string& key) const
-  {
-    std::unique_lock<std::mutex> lock(mutex_);
-    // search first if this port was remapped
-    if(!internal_to_external_.empty())
-    {
-      if (auto parent = parent_bb_.lock())
-      {
-        auto remapping_it = internal_to_external_.find(key);
-        if (remapping_it != internal_to_external_.end())
-        {
-          return parent->getEntry(remapping_it->second);
-        }
-      }
-    }
-    auto it = storage_.find(key);
-    return (it == storage_.end()) ? nullptr : it->second.get();
-  }
+  void enableAutoRemapping(bool remapping);
 
-  [[nodiscard]] Entry* getEntry(const std::string& key)
-  {
-    // "Avoid Duplication in const and Non-const Member Function,"
-    // on p. 23, in Item 3 "Use const whenever possible," in Effective C++, 3d ed
-    return const_cast<Entry*>( static_cast<const Blackboard &>(*this).getEntry(key));
-  }
+  [[nodiscard]] const std::shared_ptr<Entry> getEntry(const std::string& key) const;
 
-  [[nodiscard]] AnyPtrLocked getAnyLocked(const std::string& key)
-  {
-    if(auto entry = getEntry(key))
-    {
-      return AnyPtrLocked(&entry->value, &entry->entry_mutex);
-    }
-    return {};
-  }
+  [[nodiscard]] std::shared_ptr<Blackboard::Entry> getEntry(const std::string& key);
 
-  [[nodiscard]] AnyPtrLocked getAnyLocked(const std::string& key) const
-  {
-    if(auto entry = getEntry(key))
-    {
-      return AnyPtrLocked(&entry->value,  const_cast<std::mutex*>(&entry->entry_mutex));
-    }
-    return {};
-  }
+  [[nodiscard]] AnyPtrLocked getAnyLocked(const std::string& key);
+
+  [[nodiscard]] AnyPtrLocked getAnyLocked(const std::string& key) const;
 
   [[deprecated("Use getAnyLocked instead")]]
-  const Any* getAny(const std::string& key) const
-  {
-    return getAnyLocked(key).get();
-  }
+  const Any* getAny(const std::string& key) const;
 
   [[deprecated("Use getAnyLocked instead")]]
-  Any* getAny(const std::string& key)
-  {
-    return const_cast<Any*>(getAnyLocked(key).get());
-  }
+  Any* getAny(const std::string& key);
 
   /** Return true if the entry with the given key was found.
    *  Note that this method may throw an exception if the cast to T failed.
@@ -139,6 +99,11 @@ public:
   {
     if (auto any_ref = getAnyLocked(key))
     {
+      const auto& any = any_ref.get();
+      if(any->empty())
+      {
+        throw RuntimeError("Blackboard::get() error. Entry [", key, "] hasn't been initialized, yet");
+      }
       return any_ref.get()->cast<T>();
     }
     else
@@ -153,30 +118,19 @@ public:
   {
     std::unique_lock lock(mutex_);
 
-    // search first if this port was remapped.
-    // Change the parent_bb_ in that case
-    if(!internal_to_external_.empty())
-    {
-      auto remapping_it = internal_to_external_.find(key);
-      if (remapping_it != internal_to_external_.end())
-      {
-        const auto& remapped_key = remapping_it->second;
-        if (auto parent = parent_bb_.lock())
-        {
-          parent->set(remapped_key, value);
-          return;
-        }
-      }
-    }
-
     // check local storage
     auto it = storage_.find(key);
     if (it == storage_.end())
     {
       // create a new entry
       Any new_value(value);
-      PortInfo new_port(PortDirection::INOUT, new_value.type(), {});
-      storage_.emplace(key, std::make_unique<Entry>(std::move(new_value), new_port));
+      PortInfo new_port(PortDirection::INOUT, new_value.type(),
+                        GetAnyFromStringFunctor<T>());
+      lock.unlock();
+      auto entry = createEntryImpl(key, new_port);
+      lock.lock();
+      storage_.insert( {key, entry} );
+      entry->value = new_value;
     }
     else
     {
@@ -216,50 +170,57 @@ public:
             new_value = std::move(any_from_string);
           }
         }
+        // check if we are doing a safe cast between numbers
+        // for instance, it is safe to use int(100) to set
+        // a uint8_t port, but not int(-42) or int(300)
+        if constexpr(std::is_arithmetic_v<T>)
+        {
+          if(mismatching && isCastingSafe(previous_type, value))
+          {
+            mismatching = false;
+          }
+        }
 
         if (mismatching)
         {
           debugMessage();
 
-          throw LogicError("Blackboard::set() failed: once declared, the type of a port "
-                           "shall not change. Declared type [",
-                           BT::demangle(previous_type), "] != current type [",
-                           BT::demangle(typeid(T)), "]");
+          auto msg = StrCat("Blackboard::set(", key, "): once declared, "
+                            "the type of a port shall not change. "
+                            "Previously declared type [", BT::demangle(previous_type),
+                            "], current type [", BT::demangle(typeid(T)), "]");
+          throw LogicError(msg);
         }
       }
-      previous_any = std::move(new_value);
+      new_value.copyInto(previous_any);
     }
   }
 
-  void setPortInfo(const std::string &key, const PortInfo& info);
-
-  [[nodiscard]] const PortInfo* portInfo(const std::string& key);
+   [[nodiscard]] const PortInfo* portInfo(const std::string& key);
 
   void addSubtreeRemapping(StringView internal, StringView external);
 
   void debugMessage() const;
 
-  [[nodiscard]] std::vector<StringView> getKeys(bool include_remapped = true) const;
+  [[nodiscard]] std::vector<StringView> getKeys() const;
 
-  void clear()
-  {
-    std::unique_lock<std::mutex> lock(mutex_);
-    storage_.clear();
-  }
+  void clear();
 
   [[deprecated("Use getAnyLocked to access safely an Entry")]]
-  std::recursive_mutex& entryMutex() const
-  {
-    return entry_mutex_;
-  }
+  std::recursive_mutex& entryMutex() const;
+
+  void createEntry(const std::string& key, const PortInfo& info);
 
 private:
   mutable std::mutex mutex_;
   mutable std::recursive_mutex entry_mutex_;
-  std::unordered_map<std::string, std::unique_ptr<Entry>> storage_;
+  std::unordered_map<std::string, std::shared_ptr<Entry>> storage_;
   std::weak_ptr<Blackboard> parent_bb_;
   std::unordered_map<std::string, std::string> internal_to_external_;
 
+  std::shared_ptr<Entry> createEntryImpl(const std::string &key, const PortInfo& info);
+
+  bool autoremapping_ = false;
 };
 
 }   // namespace BT
