@@ -12,6 +12,25 @@ namespace BT
 std::mutex Groot2Publisher::used_ports_mutex;
 std::set<unsigned> Groot2Publisher::used_ports;
 
+enum {
+  IDLE_FROM_SUCCESS = 10 + static_cast<int>(NodeStatus::SUCCESS),
+  IDLE_FROM_FAILURE = 10 + static_cast<int>(NodeStatus::FAILURE),
+  IDLE_FROM_RUNNING = 10 + static_cast<int>(NodeStatus::RUNNING)
+};
+
+struct Transition
+{
+  // when serializing, we will remove the initial time and serialize only
+  // 6 bytes, instead of 8
+  uint64_t timestamp_usec;
+  // if you have more than 64.000 nodes, you are doing something wrong :)
+  uint16_t node_uid;
+  // enough bits to contain NodeStatus
+  uint8_t status;
+
+  uint8_t padding[5];
+};
+
 std::array<char,16> CreateRandomUUID()
 {
   std::mt19937 gen;
@@ -33,9 +52,9 @@ std::array<char,16> CreateRandomUUID()
   return out;
 }
 
-struct Groot2Publisher::Pimpl
+struct Groot2Publisher::PImpl
 {
-  Pimpl() : context(), server(context, ZMQ_REP), publisher(context, ZMQ_PUB)
+  PImpl() : context(), server(context, ZMQ_REP), publisher(context, ZMQ_PUB)
   {
     server.set(zmq::sockopt::linger, 0);
     publisher.set(zmq::sockopt::linger, 0);
@@ -49,6 +68,38 @@ struct Groot2Publisher::Pimpl
     publisher.set(zmq::sockopt::rcvtimeo, timeout_rcv);
   }
 
+  unsigned server_port = 0;
+  std::string server_address;
+  std::string publisher_address;
+
+  std::string tree_xml;
+
+  std::atomic_bool active_server;
+  std::thread server_thread;
+
+  std::mutex status_mutex;
+
+  std::string status_buffer;
+  // each element of this map points to a character in _p->status_buffer
+  std::unordered_map<uint16_t, char*> status_buffermap;
+
+  // weak reference to the tree.
+  std::unordered_map<std::string, std::weak_ptr<BT::Tree::Subtree>> subtrees;
+  std::unordered_map<uint16_t, std::weak_ptr<BT::TreeNode>> nodes_by_uid;
+
+  std::mutex hooks_map_mutex;
+  std::unordered_map<uint16_t, Monitor::Hook::Ptr> pre_hooks;
+  std::unordered_map<uint16_t, Monitor::Hook::Ptr> post_hooks;
+
+  std::chrono::system_clock::time_point last_heartbeat;
+  std::chrono::milliseconds max_heartbeat_delay = std::chrono::milliseconds(5000);
+
+  std::atomic_bool recording = false;
+  std::deque<Transition> transitions_buffer;
+  std::chrono::microseconds recording_fist_time;
+
+  std::thread heartbeat_thread;
+
   zmq::context_t context;
   zmq::socket_t server;
   zmq::socket_t publisher;
@@ -57,9 +108,10 @@ struct Groot2Publisher::Pimpl
 Groot2Publisher::Groot2Publisher(const BT::Tree& tree,
                                  unsigned server_port) :
   StatusChangeLogger(tree.rootNode()),
-  server_port_(server_port),
-  zmq_(new Pimpl())
+  _p(new PImpl())
 {
+  _p->server_port = server_port;
+
   {
     std::unique_lock<std::mutex> lk(Groot2Publisher::used_ports_mutex);
     if(Groot2Publisher::used_ports.count(server_port) != 0 ||
@@ -73,7 +125,7 @@ Groot2Publisher::Groot2Publisher(const BT::Tree& tree,
     Groot2Publisher::used_ports.insert(server_port+1);
   }
 
-  tree_xml_ = WriteTreeToXML(tree, true);
+  _p->tree_xml = WriteTreeToXML(tree, true, true);
 
   //-------------------------------
   // Prepare the status buffer
@@ -82,72 +134,95 @@ Groot2Publisher::Groot2Publisher(const BT::Tree& tree,
   {
     node_count += subtree->nodes.size();
   }
-  status_buffer_.resize(3 * node_count);
+  _p->status_buffer.resize(3 * node_count);
 
   unsigned ptr_offset = 0;
-  char* buffer_ptr = status_buffer_.data();
+  char* buffer_ptr = _p->status_buffer.data();
 
   for(const auto& subtree: tree.subtrees)
   {
     auto name = subtree->instance_name.empty() ? subtree->tree_ID : subtree->instance_name;
-    subtrees_.insert( {name, subtree} );
+    _p->subtrees.insert( {name, subtree} );
 
     for(const auto& node: subtree->nodes)
     {
-      nodes_by_uid_.insert( {node->UID(), node} );
+      _p->nodes_by_uid.insert( {node->UID(), node} );
 
       ptr_offset += Monitor::Serialize(buffer_ptr, ptr_offset,
                                        node->UID());
-      status_buffer_map_.insert( {node->UID(), buffer_ptr + ptr_offset} );
+      _p->status_buffermap.insert( {node->UID(), buffer_ptr + ptr_offset} );
       ptr_offset += Monitor::Serialize(buffer_ptr, ptr_offset,
                                        uint8_t(NodeStatus::IDLE));
     }
   }
   //-------------------------------
-  server_address_ = StrCat("tcp://*:", std::to_string(server_port));
-  publisher_address_ = StrCat("tcp://*:", std::to_string(server_port+1));
+  _p->server_address = StrCat("tcp://*:", std::to_string(server_port));
+  _p->publisher_address = StrCat("tcp://*:", std::to_string(server_port+1));
 
-  zmq_->server.bind(server_address_.c_str());
-  zmq_->publisher.bind(publisher_address_.c_str());
+  _p->server.bind(_p->server_address.c_str());
+  _p->publisher.bind(_p->publisher_address.c_str());
 
-  server_thread_ = std::thread(&Groot2Publisher::serverLoop, this);
-  heartbeat_thread_ = std::thread(&Groot2Publisher::heartbeatLoop, this);
+  _p->server_thread = std::thread(&Groot2Publisher::serverLoop, this);
+  _p->heartbeat_thread = std::thread(&Groot2Publisher::heartbeatLoop, this);
+}
+
+void Groot2Publisher::setMaxHeartbeatDelay(std::chrono::milliseconds delay)
+{
+  _p->max_heartbeat_delay = delay;
+}
+
+std::chrono::milliseconds Groot2Publisher::maxHeartbeatDelay() const
+{
+  return _p->max_heartbeat_delay;
 }
 
 Groot2Publisher::~Groot2Publisher()
 {
   removeAllHooks();
 
-  active_server_ = false;
-  if (server_thread_.joinable())
+  _p->active_server = false;
+  if (_p->server_thread.joinable())
   {
-    server_thread_.join();
+    _p->server_thread.join();
   }
 
-  if (heartbeat_thread_.joinable())
+  if (_p->heartbeat_thread.joinable())
   {
-    heartbeat_thread_.join();
+    _p->heartbeat_thread.join();
   }
 
   flush();
-  delete zmq_;
 
   {
     std::unique_lock<std::mutex> lk(Groot2Publisher::used_ports_mutex);
-    Groot2Publisher::used_ports.erase(server_port_);
+    Groot2Publisher::used_ports.erase(_p->server_port);
   }
 }
 
-void Groot2Publisher::callback(Duration, const TreeNode& node,
+void Groot2Publisher::callback(Duration ts, const TreeNode& node,
                                NodeStatus prev_status, NodeStatus new_status)
 {
-  std::unique_lock<std::mutex> lk(status_mutex_);
+  std::unique_lock<std::mutex> lk(_p->status_mutex);
   auto status = static_cast<char>(new_status);
 
   if( new_status == NodeStatus::IDLE) {
     status = 10 + static_cast<char>(prev_status);
   }
-  *(status_buffer_map_.at(node.UID())) = status;
+  *(_p->status_buffermap.at(node.UID())) = status;
+
+  if(_p->recording)
+  {
+    Transition trans;
+    trans.node_uid = node.UID();
+    trans.status = static_cast<uint8_t>(new_status);
+    auto timestamp = ts -_p->recording_fist_time;
+    trans.timestamp_usec =
+        std::chrono::duration_cast<std::chrono::microseconds>(timestamp).count();
+    _p->transitions_buffer.push_back(trans);
+    while(_p->transitions_buffer.size() > 1000) {
+      _p->transitions_buffer.pop_front();
+    }
+  }
 }
 
 void Groot2Publisher::flush()
@@ -159,8 +234,8 @@ void Groot2Publisher::serverLoop()
 {
   auto const serialized_uuid = CreateRandomUUID();
 
-  active_server_ = true;
-  auto& socket = zmq_->server;
+  _p->active_server = true;
+  auto& socket = _p->server;
 
   auto sendErrorReply = [&socket](const std::string& msg)
   {
@@ -170,10 +245,10 @@ void Groot2Publisher::serverLoop()
     error_msg.send(socket);
   };
 
-  // initialize last_heartbeat_
-  last_heartbeat_ = std::chrono::system_clock::now();
+  // initialize _p->last_heartbeat
+  _p->last_heartbeat = std::chrono::system_clock::now();
 
-  while (active_server_)
+  while (_p->active_server)
   {
     zmq::multipart_t requestMsg;
     if( !requestMsg.recv(socket) || requestMsg.size() == 0)
@@ -181,7 +256,7 @@ void Groot2Publisher::serverLoop()
       continue;
     }
     // this heartbeat will help establishing if Groot is connected or not
-    last_heartbeat_ = std::chrono::system_clock::now();
+    _p->last_heartbeat = std::chrono::system_clock::now();
 
     std::string const request_str = requestMsg[0].to_string();
     if(request_str.size() != Monitor::RequestHeader::size())
@@ -194,6 +269,7 @@ void Groot2Publisher::serverLoop()
 
     Monitor::ReplyHeader reply_header;
     reply_header.request = request_header;
+    reply_header.request.protocol = Monitor::kProtocolID;
     reply_header.tree_id = serialized_uuid;
 
     zmq::multipart_t reply_msg;
@@ -203,13 +279,13 @@ void Groot2Publisher::serverLoop()
     {
       case Monitor::RequestType::FULLTREE:
       {
-        reply_msg.addstr( tree_xml_ );
+        reply_msg.addstr( _p->tree_xml );
       } break;
 
       case Monitor::RequestType::STATUS:
       {
-        std::unique_lock<std::mutex> lk(status_mutex_);
-        reply_msg.addstr( status_buffer_ );
+        std::unique_lock<std::mutex> lk(_p->status_mutex);
+        reply_msg.addstr( _p->status_buffer );
       } break;
 
       case Monitor::RequestType::BLACKBOARD:
@@ -330,14 +406,63 @@ void Groot2Publisher::serverLoop()
 
       case Monitor::RequestType::HOOKS_DUMP:
       {
-        std::unique_lock<std::mutex> lk(hooks_map_mutex_);
+        std::unique_lock<std::mutex> lk(_p->hooks_map_mutex);
         auto json_out = nlohmann::json::array();
-        for(auto [node_uid, breakpoint]: pre_hooks_)
+        for(auto [node_uid, breakpoint]: _p->pre_hooks)
         {
           json_out.push_back( *breakpoint );
         }
         reply_msg.addstr( json_out.dump() );
       } break;
+
+      case Monitor::RequestType::TOGGLE_RECORDING:
+      {
+        if(requestMsg.size() != 2) {
+          sendErrorReply("must be 2 parts message");
+          continue;
+        }
+
+        auto const cmd = (requestMsg[1].to_string());
+        if(cmd == "start")
+        {
+          _p->recording = true;
+          // to keep the first time for callback
+          _p->recording_fist_time = std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::high_resolution_clock::now().time_since_epoch());
+          // to send consistent time for client
+          auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::system_clock::now().time_since_epoch());
+          reply_msg.addstr(std::to_string(now.count()));
+          std::unique_lock<std::mutex> lk(_p->status_mutex);
+          _p->transitions_buffer.clear();
+        }
+        else if(cmd == "stop")
+        {
+          _p->recording = false;
+        }
+      } break;
+
+      case Monitor::RequestType::GET_TRANSITIONS:
+      {
+        thread_local std::string trans_buffer;
+        trans_buffer.resize(9 * _p->transitions_buffer.size());
+
+        std::unique_lock<std::mutex> lk(_p->status_mutex);
+        size_t offset = 0;
+        for(const auto& trans: _p->transitions_buffer)
+        {
+          std::memcpy(&trans_buffer[offset], &trans.timestamp_usec, 6);
+          offset += 6;
+          std::memcpy(&trans_buffer[offset], &trans.node_uid, 2);
+          offset += 2;
+          std::memcpy(&trans_buffer[offset], &trans.status, 1);
+          offset += 1;
+        }
+        _p->transitions_buffer.clear();
+        trans_buffer.resize(offset);
+        reply_msg.addstr(trans_buffer);
+      } break;
+
       default: {
         sendErrorReply("Request not recognized");
         continue;
@@ -350,8 +475,8 @@ void Groot2Publisher::serverLoop()
 
 void BT::Groot2Publisher::enableAllHooks(bool enable)
 {
-  std::unique_lock<std::mutex> lk(hooks_map_mutex_);
-  for(auto& [node_uid, hook]: pre_hooks_)
+  std::unique_lock<std::mutex> lk(_p->hooks_map_mutex);
+  for(auto& [node_uid, hook]: _p->pre_hooks)
   {
     std::unique_lock<std::mutex> lk(hook->mutex);
     hook->enabled = enable;
@@ -368,14 +493,14 @@ void Groot2Publisher::heartbeatLoop()
 {
   bool has_heartbeat = true;
 
-  while (active_server_)
+  while (_p->active_server)
   {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     auto now = std::chrono::system_clock::now();
     bool prev_heartbeat = has_heartbeat;
 
-    has_heartbeat = ( now - last_heartbeat_ < std::chrono::milliseconds(5000));
+    has_heartbeat = ( now - _p->last_heartbeat < _p->max_heartbeat_delay);
 
     // if we loose or gain heartbeat, disable/enable all breakpoints
     if(has_heartbeat != prev_heartbeat)
@@ -393,9 +518,9 @@ Groot2Publisher::generateBlackboardsDump(const std::string &bb_list)
   for(auto name: bb_names)
   {
     std::string const bb_name(name);
-    auto it = subtrees_.find(bb_name);
+    auto it = _p->subtrees.find(bb_name);
 
-    if(it != subtrees_.end())
+    if(it != _p->subtrees.end())
     {
       // lock the weak pointer
       if(auto subtree = it->second.lock()) {
@@ -409,8 +534,8 @@ Groot2Publisher::generateBlackboardsDump(const std::string &bb_list)
 bool Groot2Publisher::insertHook(std::shared_ptr<Monitor::Hook> hook)
 {
   auto const node_uid = hook->node_uid;
-  auto it = nodes_by_uid_.find(node_uid);
-  if( it == nodes_by_uid_.end())
+  auto it = _p->nodes_by_uid.find(node_uid);
+  if( it == _p->nodes_by_uid.end())
   {
     return false;
   }
@@ -428,12 +553,12 @@ bool Groot2Publisher::insertHook(std::shared_ptr<Monitor::Hook> hook)
       return NodeStatus::SKIPPED;
     }
 
-    // Notify that a breakpoint was reached, using the zmq_->publisher
+    // Notify that a breakpoint was reached, using the _p->publisher
     Monitor::RequestHeader breakpoint_request(Monitor::BREAKPOINT_REACHED);
     zmq::multipart_t request_msg;
     request_msg.addstr( Monitor::SerializeHeader(breakpoint_request) );
     request_msg.addstr(std::to_string(hook->node_uid));
-    request_msg.send(zmq_->publisher);
+    request_msg.send(_p->publisher);
 
     // wait until someone wake us up
     if(hook->mode == Monitor::Hook::Mode::BREAKPOINT)
@@ -452,15 +577,15 @@ bool Groot2Publisher::insertHook(std::shared_ptr<Monitor::Hook> hook)
     if(hook->remove_when_done)
     {
       // self-destruction at the end of this lambda function
-      std::unique_lock<std::mutex> lk(hooks_map_mutex_);
-      pre_hooks_.erase(hook->node_uid);
+      std::unique_lock<std::mutex> lk(_p->hooks_map_mutex);
+      _p->pre_hooks.erase(hook->node_uid);
       node.setPreTickFunction({});
     }
     return hook->desired_status;
   };
 
-  std::unique_lock<std::mutex> lk(hooks_map_mutex_);
-  pre_hooks_[node_uid] = hook;
+  std::unique_lock<std::mutex> lk(_p->hooks_map_mutex);
+  _p->pre_hooks[node_uid] = hook;
   node->setPreTickFunction(injectedCallback);
 
   return true;
@@ -468,8 +593,8 @@ bool Groot2Publisher::insertHook(std::shared_ptr<Monitor::Hook> hook)
 
 bool Groot2Publisher::unlockBreakpoint(Position pos, uint16_t node_uid, NodeStatus result, bool remove)
 {
-  auto it = nodes_by_uid_.find(node_uid);
-  if( it == nodes_by_uid_.end())
+  auto it = _p->nodes_by_uid.find(node_uid);
+  if( it == _p->nodes_by_uid.end())
   {
     return false;
   }
@@ -501,8 +626,8 @@ bool Groot2Publisher::unlockBreakpoint(Position pos, uint16_t node_uid, NodeStat
 
 bool Groot2Publisher::removeHook(Position pos, uint16_t node_uid)
 {
-  auto it = nodes_by_uid_.find(node_uid);
-  if( it == nodes_by_uid_.end())
+  auto it = _p->nodes_by_uid.find(node_uid);
+  if( it == _p->nodes_by_uid.end())
   {
     return false;
   }
@@ -519,8 +644,8 @@ bool Groot2Publisher::removeHook(Position pos, uint16_t node_uid)
   }
 
   {
-    std::unique_lock<std::mutex> lk(hooks_map_mutex_);
-    pre_hooks_.erase(node_uid);
+    std::unique_lock<std::mutex> lk(_p->hooks_map_mutex);
+    _p->pre_hooks.erase(node_uid);
   }
   node->setPreTickFunction({});
 
@@ -544,8 +669,8 @@ void Groot2Publisher::removeAllHooks()
   for(auto pos: {Position::PRE, Position::POST})
   {
     uids.clear();
-    auto hooks = pos == Position::PRE ? &pre_hooks_ : &post_hooks_;
-    std::unique_lock<std::mutex> lk(hooks_map_mutex_);
+    auto hooks = pos == Position::PRE ? &_p->pre_hooks : &_p->post_hooks;
+    std::unique_lock<std::mutex> lk(_p->hooks_map_mutex);
     if(!hooks->empty())
     {
       uids.reserve(hooks->size());
@@ -565,8 +690,8 @@ void Groot2Publisher::removeAllHooks()
 
 Monitor::Hook::Ptr Groot2Publisher::getHook(Position pos, uint16_t node_uid)
 {
-  auto hooks = pos == Position::PRE ? &pre_hooks_ : &post_hooks_;
-  std::unique_lock<std::mutex> lk(hooks_map_mutex_);
+  auto hooks = pos == Position::PRE ? &_p->pre_hooks : &_p->post_hooks;
+  std::unique_lock<std::mutex> lk(_p->hooks_map_mutex);
   auto bk_it = hooks->find(node_uid);
   if( bk_it == hooks->end())
   {
