@@ -263,16 +263,20 @@ public:
   };
 
   PortInfo(PortDirection direction = PortDirection::INOUT) :
-    type_(direction), type_info_(typeid(AnyTypeAllowed))
+    type_(direction), type_info_(typeid(AnyTypeAllowed)),
+    type_str_("AnyTypeAllowed")
   {}
 
   PortInfo(PortDirection direction, std::type_index type_info, StringConverter conv) :
-    type_(direction), type_info_(type_info), converter_(conv)
+    type_(direction), type_info_(type_info), converter_(conv), 
+    type_str_(BT::demangle(type_info))
   {}
 
   [[nodiscard]] PortDirection direction() const;
 
   [[nodiscard]] const std::type_index& type() const;
+
+  [[nodiscard]] const std::string& typeName() const;
 
   [[nodiscard]] Any parseString(const char* str) const;
 
@@ -319,6 +323,7 @@ private:
   std::string description_;
   Any default_value_;
   std::string default_value_str_;
+  std::string type_str_;
 };
 
 template <typename T = PortInfo::AnyTypeAllowed> [[nodiscard]]
@@ -404,6 +409,19 @@ template <typename T>
 struct has_static_method_providedPorts<
     T, typename std::enable_if<
            std::is_same<decltype(T::providedPorts()), PortsList>::value>::type>
+  : std::true_type
+{
+};
+
+template <typename T, typename = void>
+struct has_static_method_description : std::false_type
+{
+};
+
+template <typename T>
+struct has_static_method_description<
+    T, typename std::enable_if<
+           std::is_same<decltype(T::description()), std::string>::value>::type>
   : std::true_type
 {
 };
