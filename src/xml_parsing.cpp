@@ -432,8 +432,8 @@ void VerifyXML(const std::string& xml_text,
                                        "attribute [ID]");
       }
     }
-    else if (name == "Sequence" || name == "SequenceStar" ||
-             name == "Fallback")
+    else if (name == "Sequence" || name == "ReactiveSequence" ||
+        name == "SequenceWithMemory" || name == "Fallback")
     {
       if (children_count == 0)
       {
@@ -870,7 +870,10 @@ void BT::XMLParser::PImpl::recursivelyCreateSubtree(
         else
         {
           // constant string: just set that constant value into the BB
+          // IMPORTANT: this must not be autoremapped!!!
+          new_bb->enableAutoRemapping(false);
           new_bb->set(attr_name, static_cast<std::string>(attr_value));
+          new_bb->enableAutoRemapping(do_autoremap);
         }
       }
 

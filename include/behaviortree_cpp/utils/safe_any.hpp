@@ -347,9 +347,9 @@ nonstd::expected<T, std::string> Any::stringToNumber() const
 {
   static_assert(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>, "Expecting a numeric type");
 
-  auto str = linb::any_cast<SafeAny::SimpleString>(_any);
+  const auto str = linb::any_cast<SafeAny::SimpleString>(_any);
+#if __cpp_lib_to_chars >= 201611L
   T out;
-#if __has_include(<GL/gl.h>)
   auto [ptr, err] = std::from_chars(str.data(), str.data() + str.size(), out);
   if(err == std::errc())
   {
