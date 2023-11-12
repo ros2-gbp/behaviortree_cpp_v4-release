@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16.3) # version on Ubuntu Focal
 
-project(behaviortree_cpp VERSION 4.4.0 LANGUAGES C CXX)
+project(behaviortree_cpp VERSION 4.4.1 LANGUAGES C CXX)
 
 set(CMAKE_CONFIG_PATH ${CMAKE_MODULE_PATH}  "${CMAKE_CURRENT_LIST_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CONFIG_PATH}")
@@ -111,7 +111,7 @@ list(APPEND BT_SOURCE
     src/controls/reactive_sequence.cpp
     src/controls/reactive_fallback.cpp
     src/controls/sequence_node.cpp
-    src/controls/sequence_star_node.cpp
+    src/controls/sequence_with_memory_node.cpp
     src/controls/switch_node.cpp
     src/controls/while_do_else_node.cpp
 
