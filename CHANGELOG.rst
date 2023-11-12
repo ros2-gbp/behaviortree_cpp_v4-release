@@ -2,6 +2,50 @@
 Changelog for package behaviortree_cpp
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+4.4.1 (2023-11-12)
+------------------
+* erase server_port+1
+* add reset by default in base classes (fix `#694 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/694>`_)
+* fix issue `#696 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/696>`_ (wrong autoremapping)
+* Remove traces of SequenceStar
+* fix `#685 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/685>`_ (timeout in ZMP publisher)
+* clang: fix warning
+  fix warning: lambda capture 'this' is not used
+* Use feature test macro to check availability of `std::from_chars`
+* fix warning in older compilers
+* Contributors: Christoph Hertzberg, Davide Faconti, Gaël Écorchard, Shen Xingjian, Sid
+
+4.4.0 (2023-10-16)
+------------------
+* Update ex05_subtree_model.cpp
+* added any::stringToNumber
+* added SubTree model example
+* unit test for issue 660
+* adding SubTree model
+* minor changes
+* change blackboard entry
+* Update simple_string.hpp
+* SimpleString: fix warning by checking upper size limit (`#666 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/666>`_)
+* Contributors: Adam Boseley, Davide Faconti
+
+4.3.8 (2023-10-09)
+------------------
+* ReactiveSequence and ReactiveFallback will behave more similarly to 3.8
+* bug fix in wakeUpSignal
+* ignore newlines in script
+* stop ordering ports in TreeNodesModel
+* add a specific tutorial for plugins
+* Contributors: Davide Faconti
+
+4.3.7 (2023-09-12)
+------------------
+* Test and fix issue `#653 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/653>`_: AnyTypeAllowed by default
+* more time margin for Windows tests
+* Add support for successful conda builds (`#650 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/650>`_)
+* fix: Update how unit tests are executed in the github workflow so they are actually run on windows (`#647 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/647>`_)
+* Add unit test related to SequenceWithMemory `#636 <https://github.com/BehaviorTree/BehaviorTree.CPP/issues/636>`_
+* Contributors: Davide Faconti, tony-p
+
 4.3.6 (2023-08-31)
 ------------------
 * Simplify the visualization of custom type in Groot2 and improved tutorial 12
