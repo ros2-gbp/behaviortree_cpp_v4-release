@@ -47,6 +47,13 @@ auto StrEqual = [](const char* str1, const char* str2) -> bool {
   return strcmp(str1, str2) == 0;
 };
 
+
+
+struct SubtreeModel
+{
+  std::unordered_map<std::string, BT::PortInfo> ports;
+};
+
 struct XMLParser::PImpl
 {
   TreeNode::Ptr createNodeFromXML(const XMLElement* element,
@@ -56,7 +63,7 @@ struct XMLParser::PImpl
                                   Tree& output_tree);
 
   void recursivelyCreateSubtree(const std::string& tree_ID,
-                                const std::string &tree_name,
+                                const std::string &tree_path,
                                 const std::string &prefix_path,
                                 Tree& output_tree,
                                 Blackboard::Ptr blackboard,
@@ -73,6 +80,7 @@ struct XMLParser::PImpl
   const BehaviorTreeFactory& factory;
 
   std::filesystem::path current_path;
+  std::map<std::string, SubtreeModel> subtree_models;
 
   int suffix_count;
   
@@ -87,6 +95,9 @@ struct XMLParser::PImpl
     opened_documents.clear();
     tree_roots.clear();
   }
+
+private:
+  void loadSubtreeModel(const XMLElement* xml_root);
 };
 
 #if defined(__linux) || defined(__linux__)
@@ -140,6 +151,51 @@ std::vector<std::string> XMLParser::registeredBehaviorTrees() const
     out.push_back(it.first);
   }
   return out;
+}
+
+void BT::XMLParser::PImpl::loadSubtreeModel(const XMLElement* xml_root)
+{
+  for (auto models_node = xml_root->FirstChildElement("TreeNodesModel");
+       models_node != nullptr;
+       models_node = models_node->NextSiblingElement("TreeNodesModel"))
+  {
+    for (auto sub_node = models_node->FirstChildElement("SubTree");
+         sub_node != nullptr;
+         sub_node = sub_node->NextSiblingElement("SubTree"))
+    {
+      auto subtree_id = sub_node->Attribute("ID");
+      auto& subtree_model = subtree_models[subtree_id];
+
+      std::pair<const char*, BT::PortDirection>  port_types[3]=
+          { {"input_port", BT::PortDirection::INPUT},
+           {"output_port", BT::PortDirection::OUTPUT},
+           {"inout_port", BT::PortDirection::INOUT} };
+
+      for(const auto& [name, direction]: port_types)
+      {
+        for (auto port_node = sub_node->FirstChildElement(name);
+             port_node != nullptr;
+             port_node = port_node->NextSiblingElement(name))
+        {
+          BT::PortInfo port(direction);
+          auto name =  port_node->Attribute("name");
+          if(!name)
+          {
+            throw RuntimeError("Missing attribute [name] in port (SubTree model)");
+          }
+          if(auto default_value = port_node->Attribute("default"))
+          {
+            port.setDefaultValue(default_value);
+          }
+          if(auto description = port_node->Attribute("description"))
+          {
+            port.setDescription(description);
+          }
+          subtree_model.ports[name] = std::move(port);
+        }
+      }
+    }
+  }
 }
 
 void XMLParser::PImpl::loadDocImpl(tinyxml2::XMLDocument* doc, bool add_includes)
@@ -224,10 +280,12 @@ void XMLParser::PImpl::loadDocImpl(tinyxml2::XMLDocument* doc, bool add_includes
 
   XMLPrinter printer;
   doc->Print(&printer);
-  auto xml_text = std::string(printer.CStr(), size_t(printer.CStrSize() - 1));
+  auto xml_text = std::string(printer.CStr(), size_t(printer.CStrSize()));
 
   // Verify the validity of the XML before adding any behavior trees to the parser's list of registered trees
   VerifyXML(xml_text, registered_nodes);
+
+  loadSubtreeModel(xml_root);
 
   // Register each BehaviorTree within the XML
   for (auto bt_node = xml_root->FirstChildElement("BehaviorTree"); bt_node != nullptr;
@@ -254,14 +312,14 @@ void VerifyXML(const std::string& xml_text,
   auto xml_error = doc.Parse(xml_text.c_str(), xml_text.size());
   if (xml_error)
   {
-    char buffer[200];
+    char buffer[512];
     sprintf(buffer, "Error parsing the XML: %s", doc.ErrorName());
     throw RuntimeError(buffer);
   }
 
   //-------- Helper functions (lambdas) -----------------
   auto ThrowError = [&](int line_num, const std::string& text) {
-    char buffer[256];
+    char buffer[512];
     sprintf(buffer, "Error at line %d: -> %s", line_num, text.c_str());
     throw RuntimeError(buffer);
   };
@@ -300,10 +358,10 @@ void VerifyXML(const std::string& xml_text,
     for (auto node = xml_root->FirstChildElement(); node != nullptr;
          node = node->NextSiblingElement())
     {
-      const char* name = node->Name();
-      if (StrEqual(name, "Action") || StrEqual(name, "Decorator") ||
-          StrEqual(name, "SubTree") || StrEqual(name, "Condition") ||
-          StrEqual(name, "Control"))
+      const std::string name = node->Name();
+      if (name == "Action" || name == "Decorator" ||
+          name == "SubTree" || name == "Condition" ||
+          name == "Control")
       {
         const char* ID = node->Attribute("ID");
         if (!ID)
@@ -321,8 +379,8 @@ void VerifyXML(const std::string& xml_text,
 
   recursiveStep = [&](const XMLElement* node) {
     const int children_count = ChildrenCount(node);
-    const char* name = node->Name();
-    if (StrEqual(name, "Decorator"))
+    const std::string name = node->Name();
+    if (name == "Decorator")
     {
       if (children_count != 1)
       {
@@ -335,7 +393,7 @@ void VerifyXML(const std::string& xml_text,
                                        "attribute [ID]");
       }
     }
-    else if (StrEqual(name, "Action"))
+    else if (name == "Action")
     {
       if (children_count != 0)
       {
@@ -348,7 +406,7 @@ void VerifyXML(const std::string& xml_text,
                                        "attribute [ID]");
       }
     }
-    else if (StrEqual(name, "Condition"))
+    else if (name == "Condition")
     {
       if (children_count != 0)
       {
@@ -361,7 +419,7 @@ void VerifyXML(const std::string& xml_text,
                                        "attribute [ID]");
       }
     }
-    else if (StrEqual(name, "Control"))
+    else if (name == "Control")
     {
       if (children_count == 0)
       {
@@ -374,8 +432,8 @@ void VerifyXML(const std::string& xml_text,
                                        "attribute [ID]");
       }
     }
-    else if (StrEqual(name, "Sequence") || StrEqual(name, "SequenceStar") ||
-             StrEqual(name, "Fallback"))
+    else if (name == "Sequence" || name == "ReactiveSequence" ||
+        name == "SequenceWithMemory" || name == "Fallback")
     {
       if (children_count == 0)
       {
@@ -383,7 +441,7 @@ void VerifyXML(const std::string& xml_text,
                                        "child");
       }
     }
-    else if (StrEqual(name, "SubTree"))
+    else if (name == "SubTree")
     {
       auto child = node->FirstChildElement();
 
@@ -405,7 +463,7 @@ void VerifyXML(const std::string& xml_text,
                                        "attribute [ID]");
       }
     }
-    else if (StrEqual(name, "BehaviorTree"))
+    else if (name == "BehaviorTree")
     {
       if (children_count != 1)
       {
@@ -433,7 +491,7 @@ void VerifyXML(const std::string& xml_text,
       }
     }
     //recursion
-    if (StrEqual(name, "SubTree") == false)
+    if (name != "SubTree" )
     {
       for (auto child = node->FirstChildElement(); child != nullptr;
            child = child->NextSiblingElement())
@@ -600,7 +658,8 @@ TreeNode::Ptr XMLParser::PImpl::createNodeFromXML(const XMLElement* element,
   {
     if(!manifest)
     {
-      throw RuntimeError("Missing manifest. It shouldn't happen. Please report this issue");
+      auto msg = StrCat("Missing manifest for element_ID: ", element_ID, ". It shouldn't happen. Please report this issue.");
+      throw RuntimeError(msg);
     }
 
     //Check that name in remapping can be found in the manifest
@@ -631,7 +690,7 @@ TreeNode::Ptr XMLParser::PImpl::createNodeFromXML(const XMLElement* element,
         const auto port_key = static_cast<std::string>(param_res.value());
 
         // if the entry already exists, check that the type is the same
-        if (auto prev_info = blackboard->portInfo(port_key))
+        if (auto prev_info = blackboard->entryInfo(port_key))
         {
           // Check consistency of types.
           bool const port_type_mismatch = (prev_info->isStronglyTyped() &&
@@ -718,7 +777,7 @@ TreeNode::Ptr XMLParser::PImpl::createNodeFromXML(const XMLElement* element,
 
 void BT::XMLParser::PImpl::recursivelyCreateSubtree(
     const std::string& tree_ID,
-    const std::string& tree_name,
+    const std::string& tree_path,
     const std::string& prefix_path,
     Tree& output_tree,
     Blackboard::Ptr blackboard,
@@ -730,7 +789,7 @@ void BT::XMLParser::PImpl::recursivelyCreateSubtree(
   recursiveStep = [&](TreeNode::Ptr parent_node,
                       Tree::Subtree::Ptr subtree,
                       std::string prefix,
-                      const XMLElement* element) 
+                      const XMLElement* element)
   {
     // create the node
     auto node = createNodeFromXML(element, blackboard, parent_node, prefix, output_tree);
@@ -748,8 +807,9 @@ void BT::XMLParser::PImpl::recursivelyCreateSubtree(
     else   // special case: SubTreeNode
     {
       auto new_bb = Blackboard::create(blackboard);
-
-      std::set<StringView> mapped_keys;
+      const std::string subtree_ID = element->Attribute("ID");
+      std::unordered_map<std::string, std::string> remapping;
+      bool do_autoremap = false;
 
       for (auto attr = element->FirstAttribute(); attr != nullptr; attr = attr->Next())
       {
@@ -758,7 +818,7 @@ void BT::XMLParser::PImpl::recursivelyCreateSubtree(
 
         if (StrEqual(attr_name, "_autoremap"))
         {
-          const bool do_autoremap = convertFromString<bool>(attr_value);
+          do_autoremap = convertFromString<bool>(attr_value);
           new_bb->enableAutoRemapping(do_autoremap);
           continue;
         }
@@ -766,37 +826,71 @@ void BT::XMLParser::PImpl::recursivelyCreateSubtree(
         {
           continue;
         }
+        remapping.insert( {attr_name, attr_value} );
+      }
+      // check if this subtree has a model. If it does,
+      // we want o check if all the mandatory ports were remapped and
+      // add default ones, if necessary
+      auto subtree_model_it = subtree_models.find(subtree_ID);
+      if(subtree_model_it != subtree_models.end())
+      {
+        const auto& subtree_model_ports = subtree_model_it->second.ports;
+        // check if:
+        // - remapping contains mondatory ports
+        // - if any of these has default value
+        for(const auto& [port_name, port_info]: subtree_model_ports)
+        {
+          auto it = remapping.find(port_name);
+          // don't override existing remapping
+          if( it == remapping.end() && !do_autoremap)
+          {
+            // remapping is not explicitly defined in the XML: use the model
+            if(port_info.defaultValueString().empty())
+            {
+              auto msg = StrCat("In the <TreeNodesModel> the <Subtree ID=\"", subtree_ID,
+                                "\"> is defining a mandatory port called [",
+                                port_name,"], but you are not remapping it");
+              throw RuntimeError(msg);
+            }
+            else {
+              remapping.insert({port_name, port_info.defaultValueString()});
+            }
+          }
+        }
+      }
 
+      for(const auto& [attr_name, attr_value]: remapping)
+      {
         if (TreeNode::isBlackboardPointer(attr_value))
         {
           // do remapping
           StringView port_name = TreeNode::stripBlackboardPointer(attr_value);
           new_bb->addSubtreeRemapping(attr_name, port_name);
-          mapped_keys.insert(attr_name);
         }
         else
         {
           // constant string: just set that constant value into the BB
+          // IMPORTANT: this must not be autoremapped!!!
+          new_bb->enableAutoRemapping(false);
           new_bb->set(attr_name, static_cast<std::string>(attr_value));
-          mapped_keys.insert(attr_name);
+          new_bb->enableAutoRemapping(do_autoremap);
         }
       }
 
-      std::string subtree_ID = element->Attribute("ID");
-      std::string subtree_name = subtree->instance_name;
-      if(!subtree_name.empty()) {
-        subtree_name += "/";
+      std::string subtree_path = subtree->instance_name;
+      if(!subtree_path.empty()) {
+        subtree_path += "/";
       }
       if(auto name = element->Attribute("name") ) {
-        subtree_name +=  name;
+        subtree_path +=  name;
       }
       else {
-        subtree_name += subtree_ID + "::" + std::to_string(node->UID());
+        subtree_path += subtree_ID + "::" + std::to_string(node->UID());
       }
 
       recursivelyCreateSubtree(subtree_ID,
-                               subtree_name, // name
-                               subtree_name + "/",  //prefix
+                               subtree_path, // name
+                               subtree_path + "/",  //prefix
                                output_tree, new_bb, node);
     }
   };
@@ -814,7 +908,7 @@ void BT::XMLParser::PImpl::recursivelyCreateSubtree(
   // Append a new subtree to the list
   auto new_tree = std::make_shared<Tree::Subtree>();
   new_tree->blackboard = blackboard;
-  new_tree->instance_name = tree_name;
+  new_tree->instance_name = tree_path;
   new_tree->tree_ID = tree_ID;
   output_tree.subtrees.push_back(new_tree);
 
@@ -850,32 +944,8 @@ void addNodeModelToXML(const TreeNodeManifest& model,
   XMLElement* element = doc.NewElement(toStr(model.type).c_str());
   element->SetAttribute("ID", model.registration_ID.c_str());
 
-  std::vector<std::string> ordered_ports;
-  PortDirection const directions[3] = {PortDirection::INPUT,
-                                       PortDirection::OUTPUT,
-                                       PortDirection::INOUT};
-  for (PortDirection direction: directions)
+  for (const auto& [port_name, port_info] : model.ports)
   {
-    std::set<std::string> port_names;
-    for (auto& port : model.ports)
-    {
-      const auto& port_name = port.first;
-      const auto& port_info = port.second;
-      if (port_info.direction() == direction)
-      {
-        port_names.insert(port_name);
-      }
-    }
-    for (auto& port : port_names)
-    {
-      ordered_ports.push_back(port);
-    }
-  }
-
-  for (const auto& port_name : ordered_ports)
-  {
-    const auto& port_info = model.ports.at(port_name);
-
     XMLElement* port_element = nullptr;
     switch (port_info.direction())
     {

@@ -65,7 +65,7 @@ struct Groot2Publisher::PImpl
 
     int timeout_ms = 1000;
     server.set(zmq::sockopt::sndtimeo, timeout_ms);
-    publisher.set(zmq::sockopt::rcvtimeo, timeout_rcv);
+    publisher.set(zmq::sockopt::sndtimeo, timeout_ms);
   }
 
   unsigned server_port = 0;
@@ -115,7 +115,7 @@ Groot2Publisher::Groot2Publisher(const BT::Tree& tree,
   {
     std::unique_lock<std::mutex> lk(Groot2Publisher::used_ports_mutex);
     if(Groot2Publisher::used_ports.count(server_port) != 0 ||
-        Groot2Publisher::used_ports.count(server_port+1 != 0))
+        Groot2Publisher::used_ports.count(server_port+1) != 0)
     {
       auto msg = StrCat("Another instance of Groot2Publisher is using port ",
                         std::to_string(server_port));
@@ -196,6 +196,7 @@ Groot2Publisher::~Groot2Publisher()
   {
     std::unique_lock<std::mutex> lk(Groot2Publisher::used_ports_mutex);
     Groot2Publisher::used_ports.erase(_p->server_port);
+    Groot2Publisher::used_ports.erase(_p->server_port+1);
   }
 }
 

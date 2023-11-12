@@ -459,3 +459,159 @@ TEST(SubTree, Issue623_String_to_Pose2d)
   auto tree = factory.createTreeFromText(xml_text);
   tree.tickWhileRunning();
 }
+
+
+class Assert : public BT::SyncActionNode
+{
+public:
+  Assert(const std::string& name, const BT::NodeConfiguration& config)
+    : BT::SyncActionNode(name, config) {}
+
+  static BT::PortsList providedPorts() {
+    return {BT::InputPort<bool>("condition")};
+  }
+
+private:
+  virtual BT::NodeStatus tick() override {
+    if (getInput<bool>("condition").value())
+      return BT::NodeStatus::SUCCESS;
+    else
+      return BT::NodeStatus::FAILURE;
+  }
+};
+
+TEST(SubTree, Issue653_SetBlackboard)
+{
+  // clang-format off
+
+  static const char* xml_text = R"(
+<root main_tree_to_execute = "MainTree" BTCPP_format="4">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <SubTree ID="Init" test="{test}" />
+      <Assert condition="{test}" />
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="Init">
+    <SetBlackboard output_key="test" value="true"/>
+  </BehaviorTree>
+</root>
+ )";
+
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+  factory.registerNodeType<Assert>("Assert");
+  auto tree = factory.createTreeFromText(xml_text);
+  tree.tickWhileRunning();
+}
+
+TEST(SubTree, SubtreeModels)
+{
+  // clang-format off
+
+  static const char* xml_text = R"(
+<root main_tree_to_execute = "MainTree" BTCPP_format="4">
+  <TreeNodesModel>
+    <SubTree ID="MySub">
+      <input_port name="in_value" default="42"/>
+      <input_port name="in_name"/>
+      <output_port name="out_result" default="{output}"/>
+      <output_port name="out_state"/>
+    </SubTree>
+  </TreeNodesModel>
+
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <Script code="my_name:= 'john' "/>
+      <SubTree ID="MySub" in_name="{my_name}"  out_state="{my_state}"/>
+      <ScriptCondition code=" output==69 && my_state=='ACTIVE' " />
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="MySub">
+    <Sequence>
+      <ScriptCondition code="in_name=='john' && in_value==42" />
+      <Script code="out_result:=69; out_state:='ACTIVE'" />
+    </Sequence>
+  </BehaviorTree>
+</root>
+ )";
+
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(xml_text);
+  tree.tickWhileRunning();
+}
+
+
+
+class PrintToConsole : public BT::SyncActionNode
+{
+public:
+  PrintToConsole(const std::string& name, const BT::NodeConfiguration& config,
+                 std::vector<std::string>* console)
+    : BT::SyncActionNode(name, config), console_(console) {}
+
+  static BT::PortsList providedPorts() {
+    return {BT::InputPort<std::string>("message")};
+  }
+
+private:
+  virtual BT::NodeStatus tick() override {
+    if (auto res = getInput<std::string>("message"))
+    {
+      console_->push_back(res.value());
+      return BT::NodeStatus::SUCCESS;
+    }
+    else
+      return BT::NodeStatus::FAILURE;
+  }
+  std::vector<std::string>* console_;
+};
+
+TEST(SubTree, RemappingIssue696)
+{
+  // clang-format off
+
+  static const char* xml_text = R"(
+  <root BTCPP_format="4">
+    <BehaviorTree ID="Subtree1">\n"
+      <Sequence>
+        <PrintToConsole message="{msg1}"/>
+        <PrintToConsole message="{msg2}"/>
+      </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Subtree2">
+      <Sequence>
+        <SubTree ID="Subtree1" msg1="foo1" _autoremap="true"/>
+        <SubTree ID="Subtree1" msg1="foo2" _autoremap="true"/>
+      </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="MainTree">
+      <SubTree ID="Subtree2" msg2="bar"/>
+    </BehaviorTree>
+  </root>
+ )";
+
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+  std::vector<std::string> console;
+  factory.registerNodeType<PrintToConsole>("PrintToConsole", &console);
+
+  factory.registerBehaviorTreeFromText(xml_text);
+  auto tree = factory.createTree("MainTree");
+  tree.tickWhileRunning();
+
+  ASSERT_EQ(console.size(), 4);
+  ASSERT_EQ(console[0], "foo1");
+  ASSERT_EQ(console[1], "bar");
+  ASSERT_EQ(console[2], "foo2");
+  ASSERT_EQ(console[3], "bar");
+}
+

@@ -97,12 +97,12 @@ std::shared_ptr<Blackboard::Entry> Blackboard::getEntry(const std::string &key)
 }
 
 
-const PortInfo* Blackboard::portInfo(const std::string& key)
+const TypeInfo* Blackboard::entryInfo(const std::string& key)
 {
   std::unique_lock<std::mutex> lock(mutex_);
 
   auto it = storage_.find(key);
-  return (it == storage_.end()) ? nullptr : &(it->second->port_info);
+  return (it == storage_.end()) ? nullptr : &(it->second->info);
 }
 
 void Blackboard::addSubtreeRemapping(StringView internal, StringView external)
@@ -115,7 +115,7 @@ void Blackboard::debugMessage() const
 {
   for (const auto& [key, entry] : storage_)
   {
-    auto port_type = entry->port_info.type();
+    auto port_type = entry->info.type();
     if (port_type == typeid(void))
     {
       port_type = entry->value.type();
@@ -158,13 +158,13 @@ std::recursive_mutex &Blackboard::entryMutex() const
   return entry_mutex_;
 }
 
-void Blackboard::createEntry(const std::string &key, const PortInfo &info)
+void Blackboard::createEntry(const std::string &key, const TypeInfo &info)
 {
   createEntryImpl(key, info);
 }
 
 std::shared_ptr<Blackboard::Entry>
-Blackboard::createEntryImpl(const std::string& key, const PortInfo& info)
+Blackboard::createEntryImpl(const std::string& key, const TypeInfo& info)
 {
   std::unique_lock<std::mutex> lock(mutex_);
   // This function might be called recursively, when we do remapping, because we move
@@ -174,14 +174,16 @@ Blackboard::createEntryImpl(const std::string& key, const PortInfo& info)
   auto storage_it = storage_.find(key);
   if(storage_it != storage_.end())
   {
-    const auto old_type = storage_it->second->port_info.type();
-    if (old_type != info.type() &&
-        old_type != typeid(BT::PortInfo::AnyTypeAllowed) &&
-        info.type() != typeid(BT::PortInfo::AnyTypeAllowed))
+    const auto& prev_info = storage_it->second->info;
+    if (prev_info.type() != info.type() &&
+        prev_info.isStronglyTyped() &&
+        info.isStronglyTyped())
     {
       auto msg = StrCat("Blackboard entry [", key, "]: once declared, the type of a port"
-                        " shall not change. Previously declared type [", BT::demangle(old_type),
-                        "], current type [", BT::demangle(typeid(info.type())), "]");
+                        " shall not change. Previously declared type [",
+                        BT::demangle(prev_info.type()),
+                        "], current type [",
+                        BT::demangle(info.type()), "]");
 
       throw LogicError(msg);
     }
