@@ -1,3 +1,26 @@
+## behaviortree_cpp_v4 (noetic) - 4.4.2-1
+
+The packages in the `behaviortree_cpp_v4` repository were released into the `noetic` distro by running `/usr/bin/bloom-release --rosdistro noetic behaviortree_cpp_v4 -y` on `Tue, 28 Nov 2023 16:42:28 -0000`
+
+The `behaviortree_cpp` package was released.
+
+Version of package(s) in repository `behaviortree_cpp_v4`:
+
+- upstream repository: https://github.com/BehaviorTree/BehaviorTree.CPP.git
+- release repository: https://github.com/ros2-gbp/behaviortree_cpp_v4-release.git
+- rosdistro version: `4.4.1-1`
+- old version: `4.4.1-1`
+- new version: `4.4.2-1`
+
+Versions of tools used:
+
+- bloom version: `0.11.2`
+- catkin_pkg version: `0.5.2`
+- rosdep version: `0.22.2`
+- rosdistro version: `0.9.0`
+- vcstools version: `0.1.42`
+
+
 ## behaviortree_cpp_v4 (iron) - 4.4.2-1
 
 The packages in the `behaviortree_cpp_v4` repository were released into the `iron` distro by running `/usr/bin/bloom-release --rosdistro iron behaviortree_cpp_v4 -y` on `Tue, 28 Nov 2023 16:40:16 -0000`
