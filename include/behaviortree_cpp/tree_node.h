@@ -243,7 +243,7 @@ public:
    * @brief setOutput modifies the content of an Output port
    * @param key    the name of the port.
    * @param value  new value
-   * @return       valid Result, is succesfull.
+   * @return       valid Result, if succesful.
    */
   template <typename T>
   Result setOutput(const std::string& key, const T& value);
