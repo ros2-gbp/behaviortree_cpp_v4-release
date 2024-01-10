@@ -13,10 +13,9 @@
 
 #pragma once
 
-#include <condition_variable>
 #include <exception>
-#include <mutex>
 #include <map>
+#include <utility>
 
 #include "behaviortree_cpp/utils/signal.h"
 #include "behaviortree_cpp/basic_types.h"
@@ -38,7 +37,7 @@ struct TreeNodeManifest
   NodeType type;
   std::string registration_ID;
   PortsList ports;
-  std::string description;
+  KeyValueVector metadata;
 };
 
 using PortsRemapping = std::unordered_map<std::string, std::string>;
@@ -400,7 +399,8 @@ inline Result TreeNode::getInput(const std::string& key, T& destination) const
   auto remap_it = config().input_ports.find(key);
   if (remap_it == config().input_ports.end())
   {
-    return nonstd::make_unexpected(StrCat("getInput() failed because "
+    return nonstd::make_unexpected(StrCat("getInput() of node `", fullPath(),
+                                          "` failed because "
                                           "NodeConfig::input_ports "
                                           "does not contain the key: [",
                                           key, "]"));
@@ -441,10 +441,16 @@ inline Result TreeNode::getInput(const std::string& key, T& destination) const
     if (auto any_ref = config().blackboard->getAnyLocked(std::string(remapped_key)))
     {
       auto val = any_ref.get();
+      // support getInput<Any>()
+      if constexpr (std::is_same_v<T, Any>)
+      {
+        destination = *val;
+        return {};
+      }
+
       if(!val->empty())
       {
-        if (!std::is_same_v<T, std::string> &&
-            val->type() == typeid(std::string))
+        if (!std::is_same_v<T, std::string> && val->isString())
         {
           destination = ParseString(val->cast<std::string>());
         }
@@ -493,6 +499,15 @@ inline Result TreeNode::setOutput(const std::string& key, const T& value)
   if (!isBlackboardPointer(remapped_key))
   {
     return nonstd::make_unexpected("setOutput requires a blackboard pointer. Use {}");
+  }
+
+  if constexpr(std::is_same_v<BT::Any, T>)
+  {
+    if(config().manifest->ports.at(key).type() != typeid(BT::Any))
+    {
+      throw LogicError("setOutput<Any> is not allowed, unless the port "
+                       "was declared using OutputPort<Any>");
+    }
   }
 
   remapped_key = stripBlackboardPointer(remapped_key);
