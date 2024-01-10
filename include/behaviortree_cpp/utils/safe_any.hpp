@@ -16,12 +16,7 @@
 #include <charconv>
 #endif
 
-#include <exception>
-#include <algorithm>
-#include <iostream>
-#include <chrono>
 #include <string>
-#include <cstring>
 #include <type_traits>
 #include <typeindex>
 
@@ -129,19 +124,20 @@ public:
 
   Any& operator = (const Any& other);
 
-  bool isNumber() const;
+  [[nodiscard]] bool isNumber() const;
 
-  bool isIntegral() const;
+  [[nodiscard]] bool isIntegral() const;
 
-  bool isString() const
+  [[nodiscard]] bool isString() const
   {
     return _any.type() == typeid(SafeAny::SimpleString);
   }
 
+  // check is the original type is equal to T
   template <typename T>
-  bool isType() const
+  [[nodiscard]] bool isType() const
   {
-    return _any.type() == typeid(T);
+    return _original_type == typeid(T);
   }
 
   // copy the value (casting into dst). We preserve the destination type.
@@ -154,7 +150,7 @@ public:
 
   // same as tryCast, but throws if fails
   template <typename T>
-  T cast() const {
+  [[nodiscard]] T cast() const {
     if(auto res = tryCast<T>() )
     {
       return res.value();
@@ -164,17 +160,30 @@ public:
     }
   }
 
-  const std::type_index& type() const noexcept
+  // Method to access the value by pointer
+  template <typename T>
+  [[nodiscard]] T* castPtr() const {
+
+    if( _any.empty() )
+    {
+      return nullptr;
+    }
+    return linb::any_cast<T>(&_any);
+  }
+
+  // This is the original type
+  [[nodiscard]] const std::type_index& type() const noexcept
   {
     return _original_type;
   }
 
-  const std::type_info& castedType() const noexcept
+  // This is the type we casted to, internally
+  [[nodiscard]] const std::type_info& castedType() const noexcept
   {
     return _any.type();
   }
 
-  bool empty() const noexcept
+  [[nodiscard]] bool empty() const noexcept
   {
     return _any.empty();
   }
@@ -204,7 +213,7 @@ private:
   std::string errorMsg() const
   {
     return StrCat("[Any::convert]: no known safe conversion between [",
-                  demangle( _any.type() ), "] and [", demangle( typeid(T) ),"]");
+                  demangle( type() ), "] and [", demangle( typeid(T) ),"]");
   }
 };
 
@@ -290,7 +299,7 @@ inline void Any::copyInto(Any &dst)
 
   const auto& dst_type = dst.castedType();
 
-  if ((type() == dst_type) || (isString() && dst.isString()) )
+  if ((castedType() == dst_type) || (isString() && dst.isString()) )
   {
     dst._any = _any;
   }
@@ -440,7 +449,7 @@ nonstd::expected<T, std::string> Any::tryCast() const
     throw std::runtime_error("Any::cast failed because it is empty");
   }
 
-  if (_any.type() == typeid(T))
+  if (castedType() == typeid(T))
   {
     return linb::any_cast<T>(_any);
   }
