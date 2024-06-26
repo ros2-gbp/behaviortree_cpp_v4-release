@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16.3) # version on Ubuntu Focal
 
-project(behaviortree_cpp VERSION 4.6.1 LANGUAGES C CXX)
+project(behaviortree_cpp VERSION 4.6.2 LANGUAGES C CXX)
 
 set(CMAKE_CONFIG_PATH ${CMAKE_MODULE_PATH}  "${CMAKE_CURRENT_LIST_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CONFIG_PATH}")
@@ -80,6 +80,10 @@ endif()
 
 add_subdirectory(3rdparty/lexy)
 
+add_library(minitrace STATIC 3rdparty/minitrace/minitrace.cpp)
+target_compile_definitions(minitrace PRIVATE MTR_ENABLED=True)
+set_property(TARGET minitrace PROPERTY POSITION_INDEPENDENT_CODE ON)
+
 list(APPEND BT_SOURCE
     src/action_node.cpp
     src/basic_types.cpp
@@ -124,7 +128,6 @@ list(APPEND BT_SOURCE
     src/loggers/bt_observer.cpp
 
     3rdparty/tinyxml2/tinyxml2.cpp
-    3rdparty/minitrace/minitrace.cpp
     )
 
 
@@ -163,6 +166,7 @@ target_link_libraries(${BTCPP_LIBRARY}
         Threads::Threads
         ${CMAKE_DL_LIBS}
         $<BUILD_INTERFACE:foonathan::lexy>
+        minitrace
     PUBLIC
         ${BTCPP_EXTRA_LIBRARIES}
 )
@@ -194,7 +198,9 @@ message( STATUS "BTCPP_LIB_DESTINATION:   ${BTCPP_LIB_DESTINATION} " )
 message( STATUS "BTCPP_INCLUDE_DESTINATION: ${BTCPP_INCLUDE_DESTINATION} " )
 message( STATUS "BTCPP_UNIT_TESTS:   ${BTCPP_UNIT_TESTS} " )
 
+if (BTCPP_UNIT_TESTS OR BTCPP_EXAMPLES)
 add_subdirectory(sample_nodes)
+endif()
 
 ######################################################
 
@@ -214,7 +220,7 @@ endif()
 # INSTALL
 
 INSTALL(TARGETS ${BTCPP_LIBRARY}
-    EXPORT ${PROJECT_NAME}Targets
+    EXPORT ${BTCPP_LIBRARY}Targets
     ARCHIVE DESTINATION ${BTCPP_LIB_DESTINATION}
     LIBRARY DESTINATION ${BTCPP_LIB_DESTINATION}
     RUNTIME DESTINATION ${BTCPP_BIN_DESTINATION}
