@@ -13,13 +13,8 @@
 #include <filesystem>
 #include "behaviortree_cpp/bt_factory.h"
 #include "behaviortree_cpp/utils/shared_library.h"
-#include "behaviortree_cpp/contrib/json.hpp"
 #include "behaviortree_cpp/xml_parsing.h"
 #include "wildcards/wildcards.hpp"
-
-#ifdef USING_ROS
-#include <ros/package.h>
-#endif
 
 namespace BT
 {
@@ -105,17 +100,6 @@ BehaviorTreeFactory::BehaviorTreeFactory() : _p(new PImpl)
   }
 
   _p->scripting_enums = std::make_shared<std::unordered_map<std::string, int>>();
-}
-
-BehaviorTreeFactory::BehaviorTreeFactory(BehaviorTreeFactory&& other) noexcept
-{
-  this->_p = std::move(other._p);
-}
-
-BehaviorTreeFactory& BehaviorTreeFactory::operator=(BehaviorTreeFactory&& other) noexcept
-{
-  this->_p = std::move(other._p);
-  return *this;
 }
 
 BehaviorTreeFactory::~BehaviorTreeFactory()
@@ -207,66 +191,12 @@ void BehaviorTreeFactory::registerFromPlugin(const std::string& file_path)
   }
 }
 
-#ifdef USING_ROS
-
-#ifdef _WIN32
-const char os_pathsep(';');  // NOLINT
-#else
-const char os_pathsep(':');  // NOLINT
-#endif
-
-// This function is a copy from the one in class_loader_imp.hpp in ROS pluginlib
-// package, licensed under BSD.
-// https://github.com/ros/pluginlib
-std::vector<std::string> getCatkinLibraryPaths()
-{
-  std::vector<std::string> lib_paths;
-  const char* env = std::getenv("CMAKE_PREFIX_PATH");
-  if(env)
-  {
-    const std::string env_catkin_prefix_paths(env);
-    std::vector<BT::StringView> catkin_prefix_paths =
-        splitString(env_catkin_prefix_paths, os_pathsep);
-    for(BT::StringView catkin_prefix_path : catkin_prefix_paths)
-    {
-      std::filesystem::path path(static_cast<std::string>(catkin_prefix_path));
-      std::filesystem::path lib("lib");
-      lib_paths.push_back((path / lib).string());
-    }
-  }
-  return lib_paths;
-}
-
-void BehaviorTreeFactory::registerFromROSPlugins()
-{
-  std::vector<std::string> plugins;
-  ros::package::getPlugins("behaviortree_cpp", "bt_lib_plugin", plugins, true);
-  std::vector<std::string> catkin_lib_paths = getCatkinLibraryPaths();
-
-  for(const auto& plugin : plugins)
-  {
-    auto filename = std::filesystem::path(plugin + BT::SharedLibrary::suffix());
-    for(const auto& lib_path : catkin_lib_paths)
-    {
-      const auto full_path = std::filesystem::path(lib_path) / filename;
-      if(std::filesystem::exists(full_path))
-      {
-        std::cout << "Registering ROS plugins from " << full_path.string() << std::endl;
-        registerFromPlugin(full_path.string());
-        break;
-      }
-    }
-  }
-}
-#else
-
 void BehaviorTreeFactory::registerFromROSPlugins()
 {
   throw RuntimeError("Using attribute [ros_pkg] in <include>, but this library was "
                      "compiled without ROS support. Recompile the BehaviorTree.CPP "
                      "using catkin");
 }
-#endif
 
 void BehaviorTreeFactory::registerBehaviorTreeFromFile(
     const std::filesystem::path& filename)
@@ -333,8 +263,9 @@ std::unique_ptr<TreeNode> BehaviorTreeFactory::instantiateTreeNode(
       }
       else if(const auto test_config = std::get_if<TestNodeConfig>(&rule))
       {
-        // second case, the varian is a TestNodeConfig
-        auto test_node = new TestNode(name, config, *test_config);
+        // second case, the variant is a TestNodeConfig
+        auto test_node =
+            new TestNode(name, config, std::make_shared<TestNodeConfig>(*test_config));
         node.reset(test_node);
         substituted = true;
         break;
@@ -531,21 +462,8 @@ BehaviorTreeFactory::substitutionRules() const
   return _p->substitution_rules;
 }
 
-Tree& Tree::operator=(Tree&& other)
-{
-  subtrees = std::move(other.subtrees);
-  manifests = std::move(other.manifests);
-  wake_up_ = other.wake_up_;
-  return *this;
-}
-
 Tree::Tree()
 {}
-
-Tree::Tree(Tree&& other)
-{
-  (*this) = std::move(other);
-}
 
 void Tree::initialize()
 {
@@ -586,9 +504,10 @@ TreeNode* Tree::rootNode() const
   return subtree_nodes.empty() ? nullptr : subtree_nodes.front().get();
 }
 
-void Tree::sleep(std::chrono::system_clock::duration timeout)
+bool Tree::sleep(std::chrono::system_clock::duration timeout)
 {
-  wake_up_->waitFor(std::chrono::duration_cast<std::chrono::milliseconds>(timeout));
+  return wake_up_->waitFor(
+      std::chrono::duration_cast<std::chrono::milliseconds>(timeout));
 }
 
 Tree::~Tree()
@@ -620,7 +539,7 @@ Blackboard::Ptr Tree::rootBlackboard()
   return {};
 }
 
-void Tree::applyVisitor(const std::function<void(const TreeNode*)>& visitor)
+void Tree::applyVisitor(const std::function<void(const TreeNode*)>& visitor) const
 {
   BT::applyRecursiveVisitor(static_cast<const TreeNode*>(rootNode()), visitor);
 }
