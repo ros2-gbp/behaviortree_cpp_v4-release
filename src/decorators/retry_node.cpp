@@ -50,20 +50,12 @@ NodeStatus RetryNode::tick()
   }
 
   bool do_loop = try_count_ < max_attempts_ || max_attempts_ == -1;
-
-  if(status() == NodeStatus::IDLE)
-  {
-    all_skipped_ = true;
-  }
   setStatus(NodeStatus::RUNNING);
 
   while(do_loop)
   {
     NodeStatus prev_status = child_node_->status();
     NodeStatus child_status = child_node_->executeTick();
-
-    // switch to RUNNING state as soon as you find an active child
-    all_skipped_ &= (child_status == NodeStatus::SKIPPED);
 
     switch(child_status)
     {
@@ -75,6 +67,8 @@ NodeStatus RetryNode::tick()
 
       case NodeStatus::FAILURE: {
         try_count_++;
+        // Refresh max_attempts_ in case it changed in one of the child nodes
+        getInput(NUM_ATTEMPTS, max_attempts_);
         do_loop = try_count_ < max_attempts_ || max_attempts_ == -1;
 
         resetChild();
@@ -107,7 +101,7 @@ NodeStatus RetryNode::tick()
   }
 
   try_count_ = 0;
-  return all_skipped_ ? NodeStatus::SKIPPED : NodeStatus::FAILURE;
+  return NodeStatus::FAILURE;
 }
 
 }  // namespace BT
