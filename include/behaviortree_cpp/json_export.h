@@ -51,6 +51,10 @@ class JsonExporter
 public:
   static JsonExporter& get();
 
+  // Delete copy constructors as can only be this one global instance.
+  JsonExporter& operator=(JsonExporter&&) = delete;
+  JsonExporter& operator=(JsonExporter&) = delete;
+
   /**
    * @brief toJson adds the content of "any" to the JSON "destination".
    *
@@ -83,17 +87,17 @@ public:
   /**
    * @brief Register new JSON converters with addConverter<Foo>().
    * You should used first the macro BT_JSON_CONVERTER.
-   * The convertions from/to vector<T> are automatically registered.
+   * The conversions from/to vector<T> are automatically registered.
    */
   template <typename T>
   void addConverter();
 
   /**
    * @brief addConverter register a to_json function that converts a json to a type T.
-   * The convertion to std:vector<T> is automatically registered.
+   * The conversion to std:vector<T> is automatically registered.
    *
    * @param to_json the function with signature void(const T&, nlohmann::json&)
-   * @param add_type if true, add a field called [__type] with the name ofthe type.
+   * @param add_type if true, add a field called [__type] with the name of the type.
    */
   template <typename T>
   void addConverter(std::function<void(const T&, nlohmann::json&)> to_json,
@@ -101,7 +105,7 @@ public:
 
   /**
    * @brief addConverter register a from_json function that converts a json to a type T.
-   * The convertions from std::vector<T> is automatically registered.
+   * The conversions from std::vector<T> is automatically registered.
    *
    * @param from_json the function with signature void(const nlohmann::json&, T&)
    */
