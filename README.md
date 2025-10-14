@@ -4,7 +4,7 @@
 [![ros2](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/ros2.yaml/badge.svg)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/ros2.yaml)
 [![pixi (Conda)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/pixi.yaml/badge.svg)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/pixi.yaml)
 
-# BehaviorTree.CPP 4.7
+# BehaviorTree.CPP 4.8
 
 <p align="center"><img width=350 src="animated.svg"></p>
 
@@ -61,22 +61,24 @@ Three build systems are supported:
 
 Compiling with [conan](https://conan.io/):
 
-Assuming that you are in the **parent** directory of `BehaviorTree.CPP`:
+> [!NOTE]
+> Conan builds require CMake 3.23 or newer.
+
+Assuming that you are in the **root** directory of `BehaviorTree.CPP`:
 
 ```
-mkdir build; cd build
-conan install ../BehaviorTree.CPP --output-folder=. --build=missing
-cmake ../BehaviorTree.CPP -DCMAKE_TOOLCHAIN_FILE="conan_toolchain.cmake"
-cmake --build . --parallel
+conan install . -s build_type=Release --build=missing
+cmake --preset conan-release
+cmake --build --preset conan-release
 ```
 
 If you have dependencies such as ZeroMQ and SQlite already installed and you don't want to
 use conan, simply type:
 
 ```
-mkdir build; cd build
-cmake ../BehaviorTree.CPP
-cmake --build . --parallel
+mkdir build_release
+cmake -S . -B build_release
+cmake --build build_release --parallel
 ```
 
 If you want to build in a [pixi](https://pixi.sh/) project (conda virtual environment).
