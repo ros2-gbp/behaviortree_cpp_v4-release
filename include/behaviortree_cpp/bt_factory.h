@@ -21,6 +21,7 @@
 #include <set>
 #include <vector>
 
+#include "behaviortree_cpp/contrib/json.hpp"
 #include "behaviortree_cpp/contrib/magic_enum.hpp"
 #include "behaviortree_cpp/behavior_tree.h"
 
@@ -119,13 +120,19 @@ public:
   [[nodiscard]] TreeNode* rootNode() const;
 
   /**
-    * @brief Sleep for a certain amount of time. This sleep could be interrupted by the method TreeNode::emitWakeUpSignal()
+    * @brief Sleep for a certain amount of time. This sleep could be interrupted by the methods
+    * TreeNode::emitWakeUpSignal() or Tree::emitWakeUpSignal()
     *
     * @param timeout  duration of the sleep
     * @return         true if the timeout was NOT reached and the signal was received.
     *
     * */
   bool sleep(std::chrono::system_clock::duration timeout);
+
+  /**
+   * @brief Wake up the tree. This will interrupt the sleep() method.
+   */
+  void emitWakeUpSignal();
 
   ~Tree();
 
