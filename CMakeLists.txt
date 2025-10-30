@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16.3) # version on Ubuntu Focal
 
-project(behaviortree_cpp VERSION 4.8.0 LANGUAGES C CXX)
+project(behaviortree_cpp VERSION 4.8.2 LANGUAGES C CXX)
 
 # create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -28,7 +28,6 @@ option(USE_VENDORED_FLATBUFFERS "Use the bundled version of flatbuffers" ON)
 option(USE_VENDORED_LEXY "Use the bundled version of lexy" ON)
 option(USE_VENDORED_MINICORO "Use the bundled version of minicoro" ON)
 option(USE_VENDORED_MINITRACE "Use the bundled version of minitrace" ON)
-option(USE_VENDORED_TINYXML2 "Use the bundled version of tinyxml2" ON)
 
 set(BTCPP_LIB_DESTINATION     lib)
 set(BTCPP_INCLUDE_DESTINATION include)
@@ -93,11 +92,21 @@ if ( ament_cmake_FOUND )
     message(STATUS "BehaviorTree is being built using AMENT.")
     message(STATUS "------------------------------------------")
     include(cmake/ament_build.cmake)
+
+    find_package(tinyxml2_vendor REQUIRED)
+    find_package(TinyXML2 REQUIRED)
 else()
     message(STATUS "------------------------------------------")
     message(STATUS "BehaviorTree is being built without AMENT.")
     message(STATUS "------------------------------------------")
     include(cmake/conan_build.cmake)
+
+    option(USE_VENDORED_TINYXML2 "Use the bundled version of tinyxml2" ON)
+    if(USE_VENDORED_TINYXML2)
+        add_subdirectory(3rdparty/tinyxml2)
+    else()
+        find_package(tinyxml2 REQUIRED)
+    endif()
 endif()
 
 #############################################################
@@ -139,12 +148,6 @@ if(USE_VENDORED_MINITRACE)
     add_subdirectory(3rdparty/minitrace)
 else()
     find_package(minitrace REQUIRED)
-endif()
-
-if(USE_VENDORED_TINYXML2)
-    add_subdirectory(3rdparty/tinyxml2)
-else()
-    find_package(tinyxml2 REQUIRED)
 endif()
 
 list(APPEND BT_SOURCE
@@ -226,16 +229,28 @@ target_link_libraries(${BTCPP_LIBRARY}
     PRIVATE
         Threads::Threads
         ${CMAKE_DL_LIBS}
-        foonathan::lexy
-        minitrace::minitrace
-        tinyxml2::tinyxml2
-        minicoro::minicoro
-        flatbuffers::flatbuffers
-        $<$<BOOL:${BTCPP_GROOT_INTERFACE}>:cppzmq>
-        $<$<BOOL:${BTCPP_SQLITE_LOGGING}>:SQLite::SQLite3>
+        $<BUILD_INTERFACE:foonathan::lexy>
+        $<BUILD_INTERFACE:minitrace::minitrace>
+        $<BUILD_INTERFACE:tinyxml2::tinyxml2>
+        $<BUILD_INTERFACE:minicoro::minicoro>
+        $<BUILD_INTERFACE:flatbuffers::flatbuffers>
     PUBLIC
         ${BTCPP_EXTRA_LIBRARIES}
 )
+
+if(BTCPP_GROOT_INTERFACE)
+    target_link_libraries(${BTCPP_LIBRARY}
+        PRIVATE
+            $<BUILD_INTERFACE:cppzmq>
+    )
+endif()
+
+if(BTCPP_SQLITE_LOGGING)
+    target_link_libraries(${BTCPP_LIBRARY}
+        PRIVATE
+            $<BUILD_INTERFACE:SQLite::SQLite3>
+    )
+endif()
 
 target_include_directories(${BTCPP_LIBRARY}
     PUBLIC
