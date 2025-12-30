@@ -1,4 +1,4 @@
-/* Copyright (C) 2022 Davide Faconti -  All Rights Reserved
+/* Copyright (C) 2022-2025 Davide Faconti -  All Rights Reserved
 *
 *   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
 *   to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -70,7 +70,8 @@ public:
   Any(const Any& other) : _any(other._any), _original_type(other._original_type)
   {}
 
-  Any(Any&& other) : _any(std::move(other._any)), _original_type(other._original_type)
+  Any(Any&& other) noexcept
+    : _any(std::move(other._any)), _original_type(other._original_type)
   {}
 
   explicit Any(const double& value) : _any(value), _original_type(typeid(double))
@@ -117,6 +118,8 @@ public:
 
   Any& operator=(const Any& other);
 
+  Any& operator=(Any&& other) noexcept;
+
   [[nodiscard]] bool isNumber() const;
 
   [[nodiscard]] bool isIntegral() const;
@@ -134,7 +137,7 @@ public:
   }
 
   // copy the value (casting into dst). We preserve the destination type.
-  void copyInto(Any& dst);
+  void copyInto(Any& dst) const;
 
   // this is different from any_cast, because if allows safe
   // conversions between arithmetic values and from/to string.
@@ -305,7 +308,17 @@ inline bool isCastingSafe(const std::type_index& type, const T& val)
 
 inline Any& Any::operator=(const Any& other)
 {
-  this->_any = other._any;
+  if(this != &other)
+  {
+    this->_any = other._any;
+    this->_original_type = other._original_type;
+  }
+  return *this;
+}
+
+inline Any& Any::operator=(Any&& other) noexcept
+{
+  this->_any = std::move(other._any);
   this->_original_type = other._original_type;
   return *this;
 }
@@ -321,7 +334,7 @@ inline bool Any::isIntegral() const
   return _any.type() == typeid(int64_t) || _any.type() == typeid(uint64_t);
 }
 
-inline void Any::copyInto(Any& dst)
+inline void Any::copyInto(Any& dst) const
 {
   if(dst.empty())
   {
@@ -494,7 +507,7 @@ inline nonstd::expected<T, std::string> Any::tryCast() const
   }
 
   // special case when the output is an enum.
-  // We will try first a int convertion
+  // We will try first a int conversion
   if constexpr(std::is_enum_v<T>)
   {
     if(isNumber())
