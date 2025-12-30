@@ -183,6 +183,10 @@ template <>
 template <>
 [[nodiscard]] std::vector<double> convertFromString<std::vector<double>>(StringView str);
 
+// Boolean values separated by the character ";"
+template <>
+[[nodiscard]] std::vector<bool> convertFromString<std::vector<bool>>(StringView str);
+
 // Strings separated by the character ";"
 template <>
 [[nodiscard]] std::vector<std::string>
@@ -414,8 +418,11 @@ public:
     {
       default_value_str_ = BT::toStr(default_value);
     }
+    // NOLINTNEXTLINE(bugprone-empty-catch)
     catch(LogicError&)
-    {}
+    {
+      // conversion to string not available for this type, ignore
+    }
   }
 
   [[nodiscard]] const std::string& description() const;
