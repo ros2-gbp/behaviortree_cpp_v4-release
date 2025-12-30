@@ -1,3 +1,26 @@
+## behaviortree_cpp_v4 (humble) - 4.8.3-1
+
+The packages in the `behaviortree_cpp_v4` repository were released into the `humble` distro by running `/usr/bin/bloom-release --rosdistro humble behaviortree_cpp_v4 -y` on `Tue, 30 Dec 2025 10:32:28 -0000`
+
+The `behaviortree_cpp` package was released.
+
+Version of package(s) in repository `behaviortree_cpp_v4`:
+
+- upstream repository: https://github.com/BehaviorTree/BehaviorTree.CPP.git
+- release repository: https://github.com/ros2-gbp/behaviortree_cpp_v4-release.git
+- rosdistro version: `4.7.1-1`
+- old version: `4.7.1-1`
+- new version: `4.8.3-1`
+
+Versions of tools used:
+
+- bloom version: `0.13.0`
+- catkin_pkg version: `1.0.0`
+- rosdep version: `0.26.0`
+- rosdistro version: `1.0.1`
+- vcstools version: `0.1.42`
+
+
 ## behaviortree_cpp_v4 (rolling) - 4.8.2-1
 
 The packages in the `behaviortree_cpp_v4` repository were released into the `rolling` distro by running `/usr/bin/bloom-release --rosdistro rolling behaviortree_cpp_v4 -y` on `Thu, 30 Oct 2025 05:41:23 -0000`
