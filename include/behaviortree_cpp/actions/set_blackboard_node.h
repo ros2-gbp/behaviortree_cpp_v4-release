@@ -1,4 +1,4 @@
-/*  Copyright (C) 2018-2020 Davide Faconti, Eurecat -  All Rights Reserved
+/*  Copyright (C) 2018-2025 Davide Faconti, Eurecat -  All Rights Reserved
 *
 *   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
 *   to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -44,7 +44,7 @@ public:
 
   static PortsList providedPorts()
   {
-    return { InputPort("value", "Value to be written int othe output_key"),
+    return { InputPort("value", "Value to be written into the output_key"),
              BidirectionalPort("output_key", "Name of the blackboard entry where the "
                                              "value should be written") };
   }

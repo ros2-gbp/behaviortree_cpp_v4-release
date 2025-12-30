@@ -11,7 +11,6 @@ JsonExporter& JsonExporter::get()
 
 bool JsonExporter::toJson(const Any& any, nlohmann::json& dst) const
 {
-  nlohmann::json json;
   auto const& type = any.castedType();
 
   if(any.isString())
@@ -89,7 +88,7 @@ JsonExporter::ExpectedEntry JsonExporter::fromJson(const nlohmann::json& source)
   // basic vectors
   if(source.is_array() && source.size() > 0 && !source.contains("__type"))
   {
-    auto first_element = source[0];
+    const auto first_element = source[0];
     if(first_element.is_string())
     {
       return Entry{ BT::Any(source.get<std::vector<std::string>>()),
@@ -112,9 +111,20 @@ JsonExporter::ExpectedEntry JsonExporter::fromJson(const nlohmann::json& source)
     }
   }
 
-  if(!source.contains("__type") && !source.is_array())
+  if(source.is_array())
   {
-    return nonstd::make_unexpected("Missing field '__type'");
+    if(source.empty())
+      return nonstd::make_unexpected("Missing field '__type'");
+    const auto& first = source[0];
+    if(!first.is_object() || !first.contains("__type"))
+      return nonstd::make_unexpected("Missing field '__type'");
+    if(!first["__type"].is_string())
+      return nonstd::make_unexpected("Invalid '__type' (must be string)");
+  }
+  else
+  {
+    if(!source.is_object() || !source.contains("__type") || !source["__type"].is_string())
+      return nonstd::make_unexpected("Missing field '__type'");
   }
 
   auto& from_converters =
