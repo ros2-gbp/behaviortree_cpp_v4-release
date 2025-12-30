@@ -1,4 +1,4 @@
-/*  Copyright (C) 2022 Davide Faconti -  All Rights Reserved
+/*  Copyright (C) 2022-2025 Davide Faconti -  All Rights Reserved
  *
 *
 *   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
@@ -50,7 +50,7 @@ struct TestNodeConfig
  * 3. Either complete immediately (synchronous action), or after a
  *    given period of time (asynchronous action)
  *
- * This behavior is changed by the parameters pased with TestNodeConfig.
+ * This behavior is changed by the parameters passed with TestNodeConfig.
  *
  * This particular node is created by the factory when TestNodeConfig is
  * added as a substitution rule:
