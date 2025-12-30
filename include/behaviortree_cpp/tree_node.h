@@ -1,5 +1,5 @@
 /* Copyright (C) 2015-2018 Michele Colledanchise -  All Rights Reserved
-*  Copyright (C) 2018-2023 Davide Faconti -  All Rights Reserved
+*  Copyright (C) 2018-2025 Davide Faconti -  All Rights Reserved
 *
 *   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
 *   to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -99,7 +99,7 @@ struct NodeConfig
 
   const TreeNodeManifest* manifest = nullptr;
 
-  // Numberic unique identifier
+  // Numeric unique identifier
   uint16_t uid = 0;
   // Unique human-readable name, that encapsulate the subtree
   // hierarchy, for instance, given 2 nested trees, it should be:
@@ -209,7 +209,7 @@ public:
    *     NodeStatus myCallback(TreeNode& node, NodeStatus status)
    *
    * This callback is executed AFTER the tick() and, if it returns SUCCESS or FAILURE,
-   * the value returned by the actual tick() is overriden with this one.
+   * the value returned by the actual tick() is overridden with this one.
    */
   void setPostTickFunction(PostTickCallback callback);
 
@@ -251,7 +251,7 @@ public:
 
   /**
    * @brief getInputStamped is similar to getInput(dey, destination),
-   * but it returne also the Timestamp object, that can be used to check if
+   * but it returns also the Timestamp object, that can be used to check if
    * a value was updated and when.
    *
    * @param key   the name of the port.
@@ -298,7 +298,7 @@ public:
    * @brief setOutput modifies the content of an Output port
    * @param key    the name of the port.
    * @param value  new value
-   * @return       valid Result, if succesful.
+   * @return       valid Result, if successful.
    */
   template <typename T>
   Result setOutput(const std::string& key, const T& value);
@@ -370,9 +370,9 @@ public:
     }
     else if constexpr(hasNodeNameCtor<DerivedT>())
     {
-      auto node_ptr = new DerivedT(name, args...);
+      auto node_ptr = std::make_unique<DerivedT>(name, args...);
       node_ptr->config() = config;
-      return std::unique_ptr<DerivedT>(node_ptr);
+      return node_ptr;
     }
   }
 

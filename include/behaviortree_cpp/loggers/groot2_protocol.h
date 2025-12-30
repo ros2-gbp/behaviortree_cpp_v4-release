@@ -27,11 +27,11 @@ namespace BT::Monitor
 
 enum RequestType : uint8_t
 {
-  // Request the entire tree defintion as XML
+  // Request the entire tree definition as XML
   FULLTREE = 'T',
-  // Request the staus of all the nodes
+  // Request the status of all the nodes
   STATUS = 'S',
-  // retrieve the valus in a set of blackboards
+  // retrieve the values in a set of blackboards
   BLACKBOARD = 'B',
 
   // Groot requests the insertion of a hook
@@ -132,16 +132,11 @@ struct RequestHeader
 struct ReplyHeader
 {
   RequestHeader request;
-  TreeUniqueUUID tree_id;
+  TreeUniqueUUID tree_id = {};
 
   static size_t size()
   {
     return RequestHeader::size() + 16;
-  }
-
-  ReplyHeader()
-  {
-    tree_id.fill(0);
   }
 };
 
@@ -155,7 +150,7 @@ inline unsigned Serialize(char* buffer, unsigned offset, T value)
 template <typename T>
 inline unsigned Deserialize(const char* buffer, unsigned offset, T& value)
 {
-  memcpy(reinterpret_cast<char*>(&value), buffer + offset, sizeof(T));
+  memcpy(&value, buffer + offset, sizeof(T));
   return sizeof(T);
 }
 
@@ -186,7 +181,7 @@ inline RequestHeader DeserializeRequestHeader(const std::string& buffer)
   RequestHeader header;
   unsigned offset = 0;
   offset += Deserialize(buffer.data(), offset, header.protocol);
-  uint8_t type;
+  uint8_t type = 0;
   offset += Deserialize(buffer.data(), offset, type);
   header.type = static_cast<Monitor::RequestType>(type);
   offset += Deserialize(buffer.data(), offset, header.unique_id);
