@@ -1,4 +1,4 @@
-/*  Copyright (C) 2022 Davide Faconti -  All Rights Reserved
+/*  Copyright (C) 2022-2025 Davide Faconti -  All Rights Reserved
 *
 *   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
 *   to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -20,7 +20,7 @@
 /**
  * Template Action used in ex04_waypoints.cpp example.
  *
- * Its purpose is to do make it easy to create while loops wich consume the elements of a queue.
+ * Its purpose is to do make it easy to create while loops which consume the elements of a queue.
  *
  * Note that modifying the queue is not thread safe, therefore the action that creates the queue
  * or push elements into it, must be Synchronous.
@@ -47,7 +47,7 @@ struct ProtectedQueue
  *
  * We avoid this using reference semantic (wrapping the object in a shared_ptr).
  * Unfortunately, remember that this makes our access to the list not thread-safe!
- * This is the reason why we add a mutex to be used when modyfying the ProtectedQueue::items
+ * This is the reason why we add a mutex to be used when modifying the ProtectedQueue::items
  *
  * */
 
@@ -71,18 +71,12 @@ public:
       {
         return NodeStatus::FAILURE;
       }
-      else
-      {
-        T val = items.front();
-        items.pop_front();
-        setOutput("popped_item", val);
-        return NodeStatus::SUCCESS;
-      }
+      T val = items.front();
+      items.pop_front();
+      setOutput("popped_item", val);
+      return NodeStatus::SUCCESS;
     }
-    else
-    {
-      return NodeStatus::FAILURE;
-    }
+    return NodeStatus::FAILURE;
   }
 
   static PortsList providedPorts()
@@ -95,7 +89,7 @@ public:
 };
 
 /**
- * Get the size of a queue. Usefull is you want to write something like:
+ * Get the size of a queue. Useful when you want to write something like:
  *
  *  <QueueSize queue="{waypoints}" size="{wp_size}" />
  *  <Repeat num_cycles="{wp_size}" >
@@ -125,11 +119,8 @@ public:
       {
         return NodeStatus::FAILURE;
       }
-      else
-      {
-        setOutput("size", int(items.size()));
-        return NodeStatus::SUCCESS;
-      }
+      setOutput("size", int(items.size()));
+      return NodeStatus::SUCCESS;
     }
     return NodeStatus::FAILURE;
   }
