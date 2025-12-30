@@ -4,7 +4,7 @@
 [![ros2](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/ros2.yaml/badge.svg)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/ros2.yaml)
 [![pixi (Conda)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/pixi.yaml/badge.svg)](https://github.com/BehaviorTree/BehaviorTree.CPP/actions/workflows/pixi.yaml)
 
-# BehaviorTree.CPP 4.7
+# BehaviorTree.CPP 4.8
 
 <p align="center"><img width=350 src="animated.svg"></p>
 
@@ -61,22 +61,24 @@ Three build systems are supported:
 
 Compiling with [conan](https://conan.io/):
 
-Assuming that you are in the **parent** directory of `BehaviorTree.CPP`:
+> [!NOTE]
+> Conan builds require CMake 3.23 or newer.
+
+Assuming that you are in the **root** directory of `BehaviorTree.CPP`:
 
 ```
-mkdir build; cd build
-conan install ../BehaviorTree.CPP --output-folder=. --build=missing
-cmake ../BehaviorTree.CPP -DCMAKE_TOOLCHAIN_FILE="conan_toolchain.cmake"
-cmake --build . --parallel
+conan install . -s build_type=Release --build=missing
+cmake --preset conan-release
+cmake --build --preset conan-release
 ```
 
 If you have dependencies such as ZeroMQ and SQlite already installed and you don't want to
 use conan, simply type:
 
 ```
-mkdir build; cd build
-cmake ../BehaviorTree.CPP
-cmake --build . --parallel
+mkdir build_release
+cmake -S . -B build_release
+cmake --build build_release --parallel
 ```
 
 If you want to build in a [pixi](https://pixi.sh/) project (conda virtual environment).
@@ -92,10 +94,6 @@ example here: https://github.com/BehaviorTree/btcpp_sample .
 Are you using BT.CPP in your commercial product and do you need technical support / consulting?
 You can contact the primary author, **dfaconti@aurynrobotics.com**, to discuss your use case and needs.
 
-# Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=BehaviorTree/BehaviorTree.CPP&type=Date)](https://star-history.com/#BehaviorTree/BehaviorTree.CPP&Date)
-
 ## Previous version
 
 Version 3.8 of the software can be found in the branch
@@ -104,11 +102,21 @@ Version 3.8 of the software can be found in the branch
 That branch might receive bug fixes, but the new features will be implemented
 only in the master branch.
 
+# Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=BehaviorTree/BehaviorTree.CPP&type=Date)](https://star-history.com/#BehaviorTree/BehaviorTree.CPP&Date)
+
+# Contributors
+
+<a href="https://github.com/BehaviorTree/BehaviorTree.CPP/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=BehaviorTree/BehaviorTree.CPP" />
+</a>
+
 # License
 
 The MIT License (MIT)
 
-Copyright (c) 2019-2023 Davide Faconti
+Copyright (c) 2019-2025 Davide Faconti
 
 Copyright (c) 2018-2019 Davide Faconti, Eurecat
 
