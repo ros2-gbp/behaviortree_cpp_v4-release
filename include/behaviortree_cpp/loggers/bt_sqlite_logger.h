@@ -1,7 +1,8 @@
 #pragma once
 
-#include <filesystem>
 #include "behaviortree_cpp/loggers/abstract_logger.h"
+
+#include <filesystem>
 
 // forward declaration
 struct sqlite3;
@@ -99,6 +100,7 @@ private:
 
   std::thread writer_thread_;
   std::atomic_bool loop_ = true;
+  std::atomic_bool writer_ready_ = false;
 
   ExtraCallback extra_func_;
 
