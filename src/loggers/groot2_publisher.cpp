@@ -1,14 +1,15 @@
 #include "behaviortree_cpp/loggers/groot2_publisher.h"
+
+#include "zmq_addon.hpp"
+
 #include "behaviortree_cpp/loggers/groot2_protocol.h"
 #include "behaviortree_cpp/xml_parsing.h"
+
 #include <tuple>
-#include "zmq_addon.hpp"
 
 namespace BT
 {
 //------------------------------------------------------
-std::mutex Groot2Publisher::used_ports_mutex;
-std::set<unsigned> Groot2Publisher::used_ports;
 
 enum
 {
@@ -78,7 +79,7 @@ struct Groot2Publisher::PImpl
 
   std::string tree_xml;
 
-  std::atomic_bool active_server = false;
+  std::atomic_bool active_server = true;
   std::thread server_thread;
 
   std::mutex status_mutex;
@@ -95,7 +96,8 @@ struct Groot2Publisher::PImpl
   std::unordered_map<uint16_t, Monitor::Hook::Ptr> pre_hooks;
   std::unordered_map<uint16_t, Monitor::Hook::Ptr> post_hooks;
 
-  std::chrono::system_clock::time_point last_heartbeat;
+  std::mutex last_heartbeat_mutex;
+  std::chrono::steady_clock::time_point last_heartbeat;
   std::chrono::milliseconds max_heartbeat_delay = std::chrono::milliseconds(5000);
 
   std::atomic_bool recording = false;
@@ -113,20 +115,6 @@ Groot2Publisher::Groot2Publisher(const BT::Tree& tree, unsigned server_port)
   : StatusChangeLogger(tree.rootNode()), _p(new PImpl())
 {
   _p->server_port = server_port;
-
-  {
-    const std::unique_lock<std::mutex> lk(Groot2Publisher::used_ports_mutex);
-    if(Groot2Publisher::used_ports.count(server_port) != 0 ||
-       Groot2Publisher::used_ports.count(server_port + 1) != 0)
-    {
-      auto msg = StrCat("Another instance of Groot2Publisher is using port ",
-                        std::to_string(server_port));
-      throw LogicError(msg);
-    }
-    Groot2Publisher::used_ports.insert(server_port);
-    Groot2Publisher::used_ports.insert(server_port + 1);
-  }
-
   _p->tree_xml = WriteTreeToXML(tree, true, true);
 
   //-------------------------------
@@ -179,9 +167,15 @@ std::chrono::milliseconds Groot2Publisher::maxHeartbeatDelay() const
 
 Groot2Publisher::~Groot2Publisher()
 {
-  removeAllHooks();
-
+  // First, signal threads to stop
   _p->active_server = false;
+
+  // Shutdown the ZMQ context to unblock any recv() calls immediately.
+  // This prevents waiting for the recv timeout (100ms) before threads can exit.
+  // Context shutdown will cause all blocking operations to return with ETERM error.
+  _p->context.shutdown();
+
+  // Now join the threads - they should exit quickly
   if(_p->server_thread.joinable())
   {
     _p->server_thread.join();
@@ -192,13 +186,15 @@ Groot2Publisher::~Groot2Publisher()
     _p->heartbeat_thread.join();
   }
 
+  // Remove hooks after threads are stopped to avoid race conditions
+  removeAllHooks();
+
   flush();
 
-  {
-    const std::unique_lock<std::mutex> lk(Groot2Publisher::used_ports_mutex);
-    Groot2Publisher::used_ports.erase(_p->server_port);
-    Groot2Publisher::used_ports.erase(_p->server_port + 1);
-  }
+  // Explicitly close sockets before context is destroyed.
+  // This ensures proper cleanup on all platforms, especially Windows.
+  _p->server.close();
+  _p->publisher.close();
 }
 
 void Groot2Publisher::callback(Duration ts, const TreeNode& node, NodeStatus prev_status,
@@ -238,7 +234,6 @@ void Groot2Publisher::serverLoop()
 {
   auto const serialized_uuid = CreateRandomUUID();
 
-  _p->active_server = true;
   auto& socket = _p->server;
 
   auto sendErrorReply = [&socket](const std::string& msg) {
@@ -249,17 +244,32 @@ void Groot2Publisher::serverLoop()
   };
 
   // initialize _p->last_heartbeat
-  _p->last_heartbeat = std::chrono::system_clock::now();
+  {
+    const std::unique_lock lk(_p->last_heartbeat_mutex);
+    _p->last_heartbeat = std::chrono::steady_clock::now();
+  }
 
   while(_p->active_server)
   {
     zmq::multipart_t requestMsg;
-    if(!requestMsg.recv(socket) || requestMsg.size() == 0)
+    try
     {
-      continue;
+      if(!requestMsg.recv(socket) || requestMsg.size() == 0)
+      {
+        continue;
+      }
     }
+    catch(const zmq::error_t&)
+    {
+      // Context was terminated or socket error - exit the loop
+      break;
+    }
+
     // this heartbeat will help establishing if Groot is connected or not
-    _p->last_heartbeat = std::chrono::system_clock::now();
+    {
+      const std::unique_lock lk(_p->last_heartbeat_mutex);
+      _p->last_heartbeat = std::chrono::steady_clock::now();
+    }
 
     std::string const request_str = requestMsg[0].to_string();
     if(request_str.size() != Monitor::RequestHeader::size())
@@ -480,7 +490,15 @@ void Groot2Publisher::serverLoop()
       }
     }
     // send the reply
-    reply_msg.send(socket);
+    try
+    {
+      reply_msg.send(socket);
+    }
+    catch(const zmq::error_t&)
+    {
+      // Context was terminated or socket error - exit the loop
+      break;
+    }
   }
 }
 
@@ -509,10 +527,13 @@ void Groot2Publisher::heartbeatLoop()
   {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-    auto now = std::chrono::system_clock::now();
+    auto now = std::chrono::steady_clock::now();
     const bool prev_heartbeat = has_heartbeat;
 
-    has_heartbeat = (now - _p->last_heartbeat < _p->max_heartbeat_delay);
+    {
+      const std::unique_lock lk(_p->last_heartbeat_mutex);
+      has_heartbeat = (now - _p->last_heartbeat < _p->max_heartbeat_delay);
+    }
 
     // if we loose or gain heartbeat, disable/enable all breakpoints
     if(has_heartbeat != prev_heartbeat)
