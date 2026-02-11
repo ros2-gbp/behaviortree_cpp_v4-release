@@ -14,6 +14,7 @@
 
 #include "behaviortree_cpp/decorator_node.h"
 #include "behaviortree_cpp/utils/timer_queue.h"
+
 #include <atomic>
 
 namespace BT
@@ -66,7 +67,7 @@ private:
   std::atomic_bool delay_complete_ = false;
   bool delay_aborted_ = false;
   unsigned msec_;
-  bool read_parameter_from_ports_ = false;
+  bool read_parameter_from_ports_;
   std::mutex delay_mutex_;
 };
 
