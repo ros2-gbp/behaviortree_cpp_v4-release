@@ -12,8 +12,11 @@
 */
 
 #include "behaviortree_cpp/tree_node.h"
-#include <cstring>
+
 #include <array>
+#include <atomic>
+#include <cstring>
+#include <vector>
 
 namespace BT
 {
@@ -103,8 +106,25 @@ NodeStatus TreeNode::executeTick()
     if(!substituted)
     {
       using namespace std::chrono;
+      // Use atomic_thread_fence to prevent compiler reordering of time measurements.
+      // See issue #861 for details.
       const auto t1 = steady_clock::now();
-      new_status = tick();
+      std::atomic_thread_fence(std::memory_order_seq_cst);
+      try
+      {
+        new_status = tick();
+      }
+      catch(const NodeExecutionError&)
+      {
+        // Already wrapped by a child node, re-throw as-is to preserve original info
+        throw;
+      }
+      catch(const std::exception& ex)
+      {
+        // Wrap the exception with this node's context
+        throw NodeExecutionError({ name(), fullPath(), registrationName() }, ex.what());
+      }
+      std::atomic_thread_fence(std::memory_order_seq_cst);
       const auto t2 = steady_clock::now();
       if(monitor_tick)
       {
@@ -185,7 +205,9 @@ Expected<NodeStatus> TreeNode::checkPreConditions()
 {
   Ast::Environment env = { config().blackboard, config().enums };
 
-  // check the pre-conditions
+  // Check pre-conditions in order: FAILURE_IF, SUCCESS_IF, SKIP_IF, WHILE_TRUE.
+  // IMPORTANT: _failureIf, _successIf, and _skipIf are evaluated ONLY when the
+  // node is IDLE or SKIPPED. They are NOT re-evaluated while the node is RUNNING.
   for(size_t index = 0; index < size_t(PreCond::COUNT_); index++)
   {
     const auto& parse_executor = _p->pre_parsed[index];
@@ -196,7 +218,8 @@ Expected<NodeStatus> TreeNode::checkPreConditions()
 
     const auto preID = static_cast<PreCond>(index);
 
-    // Some preconditions are applied only when the node state is IDLE or SKIPPED
+    // _failureIf, _successIf, _skipIf: only checked when IDLE or SKIPPED
+    // _while: checked here AND also when RUNNING (see below)
     if(_p->status == NodeStatus::IDLE || _p->status == NodeStatus::SKIPPED)
     {
       // what to do if the condition is true
@@ -223,7 +246,8 @@ Expected<NodeStatus> TreeNode::checkPreConditions()
     }
     else if(_p->status == NodeStatus::RUNNING && preID == PreCond::WHILE_TRUE)
     {
-      // what to do if the condition is false
+      // _while is the ONLY precondition checked while RUNNING.
+      // If the condition becomes false, halt the node and return SKIPPED.
       if(!parse_executor(env).cast<bool>())
       {
         haltNode();
@@ -478,7 +502,21 @@ AnyPtrLocked BT::TreeNode::getLockedPortContent(const std::string& key)
 {
   if(auto remapped_key = getRemappedKey(key, getRawPortValue(key)))
   {
-    return _p->config.blackboard->getAnyLocked(std::string(*remapped_key));
+    const auto bb_key = std::string(*remapped_key);
+    auto result = _p->config.blackboard->getAnyLocked(bb_key);
+    if(!result && _p->config.manifest != nullptr)
+    {
+      // Entry doesn't exist yet. Create it using the port's type info
+      // from the manifest so that getLockedPortContent works even when
+      // the port is not explicitly declared in XML. Issue #942.
+      auto port_it = _p->config.manifest->ports.find(key);
+      if(port_it != _p->config.manifest->ports.end())
+      {
+        _p->config.blackboard->createEntry(bb_key, port_it->second);
+        result = _p->config.blackboard->getAnyLocked(bb_key);
+      }
+    }
+    return result;
   }
   return {};
 }
