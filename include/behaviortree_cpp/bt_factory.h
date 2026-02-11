@@ -14,16 +14,17 @@
 #ifndef BT_FACTORY_H
 #define BT_FACTORY_H
 
+#include "behaviortree_cpp/behavior_tree.h"
+#include "behaviortree_cpp/contrib/json.hpp"
+#include "behaviortree_cpp/contrib/magic_enum.hpp"
+#include "behaviortree_cpp/utils/polymorphic_cast_registry.hpp"
+
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <unordered_map>
 #include <set>
+#include <unordered_map>
 #include <vector>
-
-#include "behaviortree_cpp/contrib/json.hpp"
-#include "behaviortree_cpp/contrib/magic_enum.hpp"
-#include "behaviortree_cpp/behavior_tree.h"
 
 namespace BT
 {
@@ -192,6 +193,8 @@ public:
   }
 
 private:
+  friend class BehaviorTreeFactory;
+
   std::shared_ptr<WakeUpSignal> wake_up_;
 
   enum TickOption
@@ -202,6 +205,11 @@ private:
   };
 
   NodeStatus tickRoot(TickOption opt, std::chrono::milliseconds sleep_time);
+
+  // Fix #1046: re-point each node's NodeConfig::manifest from the
+  // factory's map to the tree's own copy so the pointers remain
+  // valid after the factory is destroyed.
+  void remapManifestPointers();
 
   uint16_t uid_counter_ = 0;
 };
@@ -224,8 +232,8 @@ public:
   BehaviorTreeFactory(const BehaviorTreeFactory& other) = delete;
   BehaviorTreeFactory& operator=(const BehaviorTreeFactory& other) = delete;
 
-  BehaviorTreeFactory(BehaviorTreeFactory&& other) noexcept = default;
-  BehaviorTreeFactory& operator=(BehaviorTreeFactory&& other) noexcept = default;
+  BehaviorTreeFactory(BehaviorTreeFactory&& other) noexcept;
+  BehaviorTreeFactory& operator=(BehaviorTreeFactory&& other) noexcept;
 
   /// Remove a registered ID.
   bool unregisterBuilder(const std::string& ID);
@@ -388,7 +396,20 @@ public:
                     "[registerNode]: you MUST implement the static method:\n"
                     "  PortsList providedPorts();\n");
 
-      static_assert(!(has_static_ports_list && !param_constructable),
+      // When extra arguments were passed to registerNodeType but the full
+      // constructor signature doesn't match, the problem is most likely a
+      // type mismatch in those extra arguments (issue #837).
+      static_assert(!(has_static_ports_list && !param_constructable
+                       && sizeof...(ExtraArgs) > 0),
+                    "[registerNode]: the constructor is NOT compatible with the "
+                    "arguments provided.\n"
+                    "Verify that the types of the extra arguments passed to "
+                    "registerNodeType match\n"
+                    "the constructor signature: "
+                    "(const std::string&, const NodeConfig&, ...)\n");
+
+      static_assert(!(has_static_ports_list && !param_constructable
+                       && sizeof...(ExtraArgs) == 0),
                     "[registerNode]: since you have a static method providedPorts(),\n"
                     "you MUST add a constructor with signature:\n"
                     "(const std::string&, const NodeConfig&)\n");
@@ -508,6 +529,45 @@ public:
    */
   [[nodiscard]] const std::unordered_map<std::string, SubstitutionRule>&
   substitutionRules() const;
+
+  /**
+   * @brief Register a polymorphic cast relationship between Derived and Base types.
+   *
+   * This enables passing shared_ptr<Derived> to ports expecting shared_ptr<Base>
+   * without type mismatch errors. The relationship is automatically applied
+   * to all trees created from this factory.
+   *
+   * Example:
+   *   factory.registerPolymorphicCast<Cat, Animal>();
+   *   factory.registerPolymorphicCast<Sphynx, Cat>();
+   *
+   * @tparam Derived The derived class (must inherit from Base)
+   * @tparam Base The base class (must be polymorphic)
+   */
+  template <typename Derived, typename Base>
+  void registerPolymorphicCast()
+  {
+    polymorphicCastRegistry().registerCast<Derived, Base>();
+  }
+
+  /**
+   * @brief Access the polymorphic cast registry.
+   *
+   * The registry is shared with all trees created from this factory,
+   * allowing trees to outlive the factory while maintaining access
+   * to polymorphic cast relationships.
+   */
+  [[nodiscard]] PolymorphicCastRegistry& polymorphicCastRegistry();
+  [[nodiscard]] const PolymorphicCastRegistry& polymorphicCastRegistry() const;
+
+  /**
+   * @brief Get a shared pointer to the polymorphic cast registry.
+   *
+   * This allows trees and blackboards to hold a reference to the registry
+   * that outlives the factory.
+   */
+  [[nodiscard]] std::shared_ptr<PolymorphicCastRegistry>
+  polymorphicCastRegistryPtr() const;
 
 private:
   struct PImpl;
