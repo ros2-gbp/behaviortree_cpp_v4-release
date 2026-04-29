@@ -1,0 +1,12 @@
+Source: ros-lyrical-behaviortree-cpp
+Section: misc
+Priority: optional
+Maintainer: Davide Faconti <davide.faconti@gmail.com>
+Build-Depends: debhelper (>= 9.0.0), cppzmq-dev, git, libsqlite3-dev, libtinyxml2-dev, libzmq3-dev, ros-lyrical-ament-cmake, ros-lyrical-ament-cmake-gtest <!nocheck>, ros-lyrical-ament-index-cpp, ros-lyrical-rclcpp, ros-lyrical-ros-environment, ros-lyrical-tinyxml2-vendor, ros-lyrical-ros-workspace
+Homepage: https://index.ros.org/p/behaviortree_cpp/#lyrical
+Standards-Version: 3.9.2
+
+Package: ros-lyrical-behaviortree-cpp
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, cppzmq-dev, libsqlite3-dev, libtinyxml2-dev, libzmq3-dev, ros-lyrical-ament-index-cpp, ros-lyrical-rclcpp, ros-lyrical-tinyxml2-vendor, ros-lyrical-ros-workspace
+Description: This package provides the Behavior Trees core library.
