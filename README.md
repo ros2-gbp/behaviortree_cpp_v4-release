@@ -1,3 +1,26 @@
+## behaviortree_cpp_v4 (rolling) - 4.10.0-1
+
+The packages in the `behaviortree_cpp_v4` repository were released into the `rolling` distro by running `/usr/bin/bloom-release --rosdistro rolling behaviortree_cpp_v4 -y` on `Fri, 24 Jul 2026 06:57:13 -0000`
+
+The `behaviortree_cpp` package was released.
+
+Version of package(s) in repository `behaviortree_cpp_v4`:
+
+- upstream repository: https://github.com/BehaviorTree/BehaviorTree.CPP.git
+- release repository: https://github.com/ros2-gbp/behaviortree_cpp_v4-release.git
+- rosdistro version: `4.9.1-1`
+- old version: `4.9.1-1`
+- new version: `4.10.0-1`
+
+Versions of tools used:
+
+- bloom version: `0.14.3`
+- catkin_pkg version: `1.1.0`
+- rosdep version: `0.26.0`
+- rosdistro version: `1.0.1`
+- vcstools version: `0.1.42`
+
+
 ## behaviortree_cpp_v4 (kilted) - 4.9.1-1
 
 The packages in the `behaviortree_cpp_v4` repository were released into the `kilted` distro by running `/usr/bin/bloom-release --rosdistro kilted behaviortree_cpp_v4 -y` on `Mon, 06 Jul 2026 20:16:46 -0000`
