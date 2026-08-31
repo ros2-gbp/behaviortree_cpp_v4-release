@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16.3) # version on Ubuntu Focal
 
-project(behaviortree_cpp VERSION 4.9.1 LANGUAGES C CXX)
+project(behaviortree_cpp VERSION 4.10.0 LANGUAGES C CXX)
 
 # create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -185,6 +185,7 @@ list(APPEND BT_SOURCE
     src/controls/try_catch_node.cpp
     src/controls/while_do_else_node.cpp
 
+    src/loggers/abstract_logger.cpp
     src/loggers/bt_cout_logger.cpp
     src/loggers/bt_file_logger_v2.cpp
     src/loggers/bt_minitrace_logger.cpp
