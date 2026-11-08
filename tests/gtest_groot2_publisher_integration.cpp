@@ -8,8 +8,6 @@
 #include <behaviortree_cpp/bt_factory.h>
 #include <gtest/gtest.h>
 
-#include <behaviortree_cpp/contrib/json.hpp>
-
 namespace
 {
 constexpr auto kHookTreeXml = R"(
@@ -70,6 +68,40 @@ void incompleteHookScenario()
   }
 
   // The server thread must remain usable after rejecting the incomplete request.
+  auto valid_reply = client.request(BT::Monitor::RequestType::FULLTREE);
+  if(valid_reply.size() != 2)
+  {
+    std::exit(EXIT_FAILURE);
+  }
+  std::exit(EXIT_SUCCESS);
+}
+
+void deeplyNestedHookScenario()
+{
+  BT::BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(R"(
+<root BTCPP_format="4">
+  <BehaviorTree ID="MainTree">
+    <AlwaysSuccess/>
+  </BehaviorTree>
+</root>
+)");
+  auto [publisher, port] = Groot2Test::makePublisher(tree);
+  // Under the sanitizers, parsing the request below takes a few seconds.
+  Groot2Test::Client client(port, 30000);
+
+  // The error for a "uid" that isn't an integer used to dump() the value, which
+  // recurses once per nesting level and overflowed the stack of the server thread.
+  constexpr size_t depth = 100000;
+  const std::string nested = std::string(depth, '[') + std::string(depth, ']');
+  auto error_reply = client.rawRequest(BT::Monitor::RequestType::HOOK_INSERT,
+                                       R"({"uid":)" + nested + R"(,"position":0})");
+  if(error_reply.size() != 2 || error_reply[0].to_string() != "error")
+  {
+    std::exit(EXIT_FAILURE);
+  }
+
+  // The server thread must remain usable after rejecting the nested request.
   auto valid_reply = client.request(BT::Monitor::RequestType::FULLTREE);
   if(valid_reply.size() != 2)
   {
@@ -163,6 +195,40 @@ TEST(Groot2PublisherIntegration, PostHookRunsAfterNodeAndCanBeRemoved)
   EXPECT_EQ(tick_count, 2);
 }
 
+TEST(Groot2PublisherIntegration, HookRequestRejectsNonIntegerUid)
+{
+  BT::BehaviorTreeFactory factory;
+  factory.registerSimpleAction("CountAction",
+                               [](BT::TreeNode&) { return BT::NodeStatus::SUCCESS; });
+  auto tree = factory.createTreeFromText(kHookTreeXml);
+  auto [publisher, port] = Groot2Test::makePublisher(tree);
+  Groot2Test::Client client(port);
+  const auto uid = tree.rootNode()->UID();
+
+  // get<uint16_t>() used to wrap uid + 65536 and truncate uid + 0.5 to the uid
+  // of the node, and to cast 1e300 out of range (undefined behavior).
+  for(const nlohmann::json bad_uid :
+      { nlohmann::json(uid + 65536), nlohmann::json(uid + 0.5), nlohmann::json(1e300) })
+  {
+    auto hook = Groot2Test::makeHook(uid, BT::Monitor::Hook::Mode::REPLACE,
+                                     BT::Monitor::Hook::Position::PRE);
+    hook["uid"] = bad_uid;
+    auto reply = client.rawRequest(BT::Monitor::RequestType::HOOK_INSERT, hook.dump());
+    ASSERT_EQ(reply.size(), 2);
+    EXPECT_EQ(reply[0].to_string(), "error") << bad_uid;
+
+    const auto remove = nlohmann::json{ { "uid", bad_uid }, { "position", 0 } };
+    reply = client.rawRequest(BT::Monitor::RequestType::HOOK_REMOVE, remove.dump());
+    ASSERT_EQ(reply.size(), 2);
+    EXPECT_EQ(reply[0].to_string(), "error") << bad_uid;
+  }
+
+  auto dump_reply = client.request(BT::Monitor::RequestType::HOOKS_DUMP);
+  ASSERT_EQ(dump_reply.size(), 2);
+  EXPECT_TRUE(nlohmann::json::parse(dump_reply[1].to_string()).empty());
+  EXPECT_EQ(tree.tickExactlyOnce(), BT::NodeStatus::SUCCESS);
+}
+
 TEST(Groot2PublisherIntegration, MalformedRequestDoesNotTerminateServer)
 {
   ::testing::FLAGS_gtest_death_test_style = "threadsafe";
@@ -173,6 +239,43 @@ TEST(Groot2PublisherIntegration, IncompleteHookRequestDoesNotTerminateServer)
 {
   ::testing::FLAGS_gtest_death_test_style = "threadsafe";
   EXPECT_EXIT(incompleteHookScenario(), ::testing::ExitedWithCode(EXIT_SUCCESS), ".*");
+}
+
+TEST(Groot2PublisherIntegration, DeeplyNestedHookRequestDoesNotTerminateServer)
+{
+  ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+  EXPECT_EXIT(deeplyNestedHookScenario(), ::testing::ExitedWithCode(EXIT_SUCCESS), ".*");
+}
+
+TEST(Groot2PublisherIntegration, BindToLoopbackAddress)
+{
+  BT::BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(R"(
+<root BTCPP_format="4">
+  <BehaviorTree ID="MainTree">
+    <AlwaysSuccess/>
+  </BehaviorTree>
+</root>
+)");
+  auto [publisher, port] = Groot2Test::makePublisher(tree, "127.0.0.1");
+  Groot2Test::Client client(port);
+
+  auto reply = client.request(BT::Monitor::RequestType::FULLTREE);
+  ASSERT_EQ(reply.size(), 2);
+  EXPECT_NE(reply[1].to_string().find("MainTree"), std::string::npos);
+}
+
+TEST(Groot2PublisherIntegration, InvalidBindAddressThrows)
+{
+  BT::BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(R"(
+<root BTCPP_format="4">
+  <BehaviorTree ID="MainTree">
+    <AlwaysSuccess/>
+  </BehaviorTree>
+</root>
+)");
+  EXPECT_THROW(BT::Groot2Publisher(tree, 1667, "not-an-interface"), zmq::error_t);
 }
 
 TEST(Groot2PublisherIntegration, BlackboardDump_NoRootWithoutExternalBlackboard)
