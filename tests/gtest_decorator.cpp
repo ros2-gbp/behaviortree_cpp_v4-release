@@ -15,6 +15,9 @@
 
 #include "behaviortree_cpp/bt_factory.h"
 
+#include <atomic>
+#include <thread>
+
 #include <gtest/gtest.h>
 
 using BT::NodeStatus;
@@ -434,6 +437,248 @@ TEST(Decorator, Inverter_InSequence)
   ASSERT_EQ(status, NodeStatus::SUCCESS);
 }
 
+// Regression test: Sleep, Delay and Timeout own a TimerQueue whose worker
+// thread locks a mutex belonging to the node. The TimerQueue member must be
+// destroyed (joining that thread) before the mutex, otherwise destroying a
+// tree with a pending timer lets the handler lock an already-destroyed mutex.
+// On libc++ this aborts with "mutex lock failed: Invalid argument".
+TEST(Decorator, DestroyTreeWhileTimerIsPending)
+{
+  BT::BehaviorTreeFactory factory;
+
+  const std::string xml_text = R"(
+    <root BTCPP_format="4">
+       <BehaviorTree ID="PendingTimers">
+          <Parallel success_count="6" failure_count="1">
+            <Sleep msec="500"/>
+            <Sleep msec="500"/>
+            <Sleep msec="500"/>
+            <Sleep msec="500"/>
+            <Delay delay_msec="500">
+              <AlwaysSuccess/>
+            </Delay>
+            <Timeout msec="500">
+              <Sleep msec="500"/>
+            </Timeout>
+          </Parallel>
+       </BehaviorTree>
+    </root>)";
+
+  factory.registerBehaviorTreeFromText(xml_text);
+
+  for(int i = 0; i < 1000; i++)
+  {
+    auto tree = factory.createTree("PendingTimers");
+    ASSERT_EQ(tree.tickOnce(), NodeStatus::RUNNING);
+    // The tree is destroyed here while all the timers are still pending:
+    // each canceled handler runs on its TimerQueue worker thread, racing
+    // with the destruction of the node members.
+  }
+}
+
+// Regression test: the Timeout timer fires on the TimerQueue worker thread
+// and halts the child from there. halt() on the tick thread (a parent halting
+// the Timeout, or Tree::haltTree) used to run concurrently with that handler,
+// so the child was halted from two threads at the same time, and when the
+// tree was destroyed right after, the handler kept using a child that no
+// longer existed.
+TEST(Decorator, TimeoutHaltWhileTimerIsHaltingTheChild)
+{
+  struct HaltCounters
+  {
+    std::atomic<int> active{ 0 };
+    std::atomic<int> max_active{ 0 };
+    std::atomic<int> total{ 0 };
+  };
+
+  // An action whose onHalted() takes a while, like one that must cancel a
+  // remote goal before it can return.
+  class SlowHaltAction : public BT::StatefulActionNode
+  {
+  public:
+    SlowHaltAction(const std::string& name, const BT::NodeConfig& config,
+                   HaltCounters* counters)
+      : StatefulActionNode(name, config), counters_(counters)
+    {}
+
+    static BT::PortsList providedPorts()
+    {
+      return {};
+    }
+
+    NodeStatus onStart() override
+    {
+      return NodeStatus::RUNNING;
+    }
+
+    NodeStatus onRunning() override
+    {
+      return NodeStatus::RUNNING;
+    }
+
+    void onHalted() override
+    {
+      const int active = ++counters_->active;
+      int max_active = counters_->max_active.load();
+      while(active > max_active &&
+            !counters_->max_active.compare_exchange_weak(max_active, active))
+      {
+      }
+      // the first cancellation does the slow work; a cancellation that
+      // arrives while it is in progress has nothing left to do
+      if(active == 1)
+      {
+        std::this_thread::sleep_for(milliseconds(200));
+      }
+      ++counters_->total;
+      --counters_->active;
+    }
+
+  private:
+    HaltCounters* counters_;
+  };
+
+  HaltCounters counters;
+  BT::BehaviorTreeFactory factory;
+  factory.registerNodeType<SlowHaltAction>("SlowHalt", &counters);
+
+  const std::string xml_text = R"(
+    <root BTCPP_format="4">
+       <BehaviorTree ID="MainTree">
+          <Timeout msec="10">
+            <SlowHalt/>
+          </Timeout>
+       </BehaviorTree>
+    </root>)";
+
+  {
+    auto tree = factory.createTreeFromText(xml_text);
+    ASSERT_EQ(tree.tickOnce(), NodeStatus::RUNNING);
+    // let the timeout expire: its handler is now halting the child on the
+    // timer thread
+    std::this_thread::sleep_for(milliseconds(60));
+    tree.haltTree();
+    // the tree, child included, is destroyed here
+  }
+
+  // the child must be halted once, never from two threads at the same time
+  ASSERT_EQ(counters.max_active.load(), 1);
+  ASSERT_EQ(counters.total.load(), 1);
+}
+
+// Regression test: halting a Sleep cancels its timer, and the canceled handler
+// runs later on the TimerQueue worker thread. When the Sleep was restarted in
+// the meantime, that stale handler used to clear the flag of the new timer, so
+// the restarted Sleep returned SUCCESS long before its duration.
+TEST(Decorator, SleepRestartedAfterHaltWaitsFullDuration)
+{
+  BT::BehaviorTreeFactory factory;
+
+  const std::string xml_text = R"(
+    <root BTCPP_format="4">
+       <BehaviorTree ID="MainTree">
+          <Sleep msec="500"/>
+       </BehaviorTree>
+    </root>)";
+
+  auto tree = factory.createTreeFromText(xml_text);
+
+  for(int i = 0; i < 20; i++)
+  {
+    ASSERT_EQ(tree.tickOnce(), NodeStatus::RUNNING);
+    tree.haltTree();
+    // restart before the timer thread runs the canceled handler
+    ASSERT_EQ(tree.tickOnce(), NodeStatus::RUNNING);
+    std::this_thread::sleep_for(milliseconds(20));
+    ASSERT_EQ(tree.tickOnce(), NodeStatus::RUNNING) << "iteration " << i;
+    tree.haltTree();
+  }
+}
+
+// Regression test: TimerQueue::cancel() cannot stop a handler that the worker
+// thread already picked up. Here the timeout expires while the tick thread
+// holds the Timeout mutex (ticking the slow child), so its handler is stuck on
+// that mutex. The child then succeeds and the Timeout restarts with a new
+// timer: the stale handler used to see the new RUNNING child and halt it
+// long before the new timeout.
+TEST(Decorator, TimeoutRestartedIgnoresStaleTimerHandler)
+{
+  struct Counters
+  {
+    int starts = 0;
+    std::atomic<int> halts{ 0 };
+  };
+
+  // the 1st, 3rd, ... start succeeds after a while; the others keep running
+  class SlowThenRunning : public BT::StatefulActionNode
+  {
+  public:
+    SlowThenRunning(const std::string& name, const BT::NodeConfig& config,
+                    Counters* counters)
+      : StatefulActionNode(name, config), counters_(counters)
+    {}
+
+    static BT::PortsList providedPorts()
+    {
+      return {};
+    }
+
+    NodeStatus onStart() override
+    {
+      if(counters_->starts++ % 2 == 0)
+      {
+        // let the 5 ms timeout expire while the Timeout mutex is held
+        std::this_thread::sleep_for(milliseconds(30));
+        // the restarted Timeout gets a long timeout
+        config().blackboard->set("msec", 1000u);
+        return NodeStatus::SUCCESS;
+      }
+      return NodeStatus::RUNNING;
+    }
+
+    NodeStatus onRunning() override
+    {
+      return NodeStatus::RUNNING;
+    }
+
+    void onHalted() override
+    {
+      ++counters_->halts;
+    }
+
+  private:
+    Counters* counters_;
+  };
+
+  Counters counters;
+  BT::BehaviorTreeFactory factory;
+  factory.registerNodeType<SlowThenRunning>("SlowThenRunning", &counters);
+
+  const std::string xml_text = R"(
+    <root BTCPP_format="4">
+       <BehaviorTree ID="MainTree">
+          <Timeout msec="{msec}">
+            <SlowThenRunning/>
+          </Timeout>
+       </BehaviorTree>
+    </root>)";
+
+  auto tree = factory.createTreeFromText(xml_text);
+
+  for(int i = 0; i < 10; i++)
+  {
+    tree.rootBlackboard()->set("msec", 5u);
+    ASSERT_EQ(tree.tickOnce(), NodeStatus::SUCCESS);
+    // restart right away, while the expired handler waits for the mutex
+    ASSERT_EQ(tree.tickOnce(), NodeStatus::RUNNING);
+    std::this_thread::sleep_for(milliseconds(20));
+    ASSERT_EQ(counters.halts.load(), i) << "iteration " << i;
+    ASSERT_EQ(tree.tickOnce(), NodeStatus::RUNNING) << "iteration " << i;
+    tree.haltTree();
+    ASSERT_EQ(counters.halts.load(), i + 1);
+  }
+}
+
 // Test KeepRunningUntilFailure decorator
 TEST(Decorator, KeepRunningUntilFailure)
 {
@@ -474,4 +719,70 @@ TEST(Decorator, KeepRunningUntilFailure)
   status = tree.tickOnce();
   ASSERT_EQ(status, NodeStatus::FAILURE);
   ASSERT_EQ(tick_count, 3);
+}
+
+// An asynchronous child (ThreadedAction) may complete right after the tick()
+// of its decorator has seen it RUNNING. DecoratorNode::executeTick() used to
+// reset such a child to IDLE: its result was lost and the action executed
+// again. This was the cause of the flaky RepeatTestAsync.
+// Here the race is reproduced deterministically: the decorator itself marks
+// the child as completed, right after having observed RUNNING.
+TEST(Decorator, ChildCompletedAfterTickIsNotDiscarded)
+{
+  class AsyncChild : public BT::ActionNodeBase
+  {
+  public:
+    AsyncChild() : ActionNodeBase("child", {})
+    {}
+    int starts = 0;
+
+    // what the thread of a ThreadedAction does when the work is done
+    void completeFromAnotherThread()
+    {
+      setStatus(NodeStatus::SUCCESS);
+    }
+    NodeStatus executeTick() override
+    {
+      if(status() == NodeStatus::IDLE)
+      {
+        starts++;
+        setStatus(NodeStatus::RUNNING);
+      }
+      return status();
+    }
+    NodeStatus tick() override
+    {
+      return status();
+    }
+    void halt() override
+    {}
+  };
+
+  class WaitChild : public BT::DecoratorNode
+  {
+  public:
+    WaitChild() : DecoratorNode("decorator", {})
+    {}
+    NodeStatus tick() override
+    {
+      setStatus(NodeStatus::RUNNING);
+      const auto child_status = child_node_->executeTick();
+      if(child_status == NodeStatus::RUNNING)
+      {
+        dynamic_cast<AsyncChild&>(*child_node_).completeFromAnotherThread();
+        return NodeStatus::RUNNING;
+      }
+      resetChild();
+      return child_status;
+    }
+  };
+
+  AsyncChild child;
+  WaitChild decorator;
+  decorator.setChild(&child);
+
+  ASSERT_EQ(decorator.executeTick(), NodeStatus::RUNNING);
+  // the result of the child must be seen by the next tick
+  ASSERT_EQ(decorator.executeTick(), NodeStatus::SUCCESS);
+  ASSERT_EQ(child.starts, 1);
 }
