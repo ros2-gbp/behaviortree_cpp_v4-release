@@ -1,6 +1,7 @@
 #include "test_helper.hpp"
 
 #include "behaviortree_cpp/bt_factory.h"
+#include "behaviortree_cpp/xml_parsing.h"
 
 #include <set>
 
@@ -594,6 +595,133 @@ TEST(SubTree, SubtreeModels)
   tree.tickWhileRunning();
 }
 
+TEST(SubTree, SubtreeModelDefault)
+{
+  // clang-format off
+
+  static const char* xml_text = R"(
+<root main_tree_to_execute = "MainTree" BTCPP_format="4">
+  <TreeNodesModel>
+    <SubTree ID="MySub">
+      <input_port name="in_value" default="42"/>
+    </SubTree>
+  </TreeNodesModel>
+
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <SubTree ID="MySub" />
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="MySub">
+    <Sequence>
+      <ScriptCondition code="in_value==42" />
+    </Sequence>
+  </BehaviorTree>
+</root>
+ )";
+
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(xml_text);
+  tree.tickWhileRunning();
+}
+
+TEST(SubTree, SubtreeModelDefaultWithAutoremap)
+{
+  // clang-format off
+
+  static const char* xml_text = R"(
+<root main_tree_to_execute = "MainTree" BTCPP_format="4">
+  <TreeNodesModel>
+    <SubTree ID="MySub">
+      <input_port name="in_value" default="42"/>
+    </SubTree>
+  </TreeNodesModel>
+
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <SubTree ID="MySub" _autoremap="true" />
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="MySub">
+    <Sequence>
+      <ScriptCondition code="in_value==42" />
+    </Sequence>
+  </BehaviorTree>
+</root>
+ )";
+
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(xml_text);
+  tree.tickWhileRunning();
+}
+
+// With _autoremap, a parent key of the same name wins over the model default
+// (#1271), and the default stays local to the SubTree.
+TEST(SubTree, SubtreeModelDefaultWithAutoremapParentWins)
+{
+  static const char* xml_text = R"(
+<root main_tree_to_execute="MainTree" BTCPP_format="4">
+  <TreeNodesModel>
+    <SubTree ID="MySub">
+      <input_port name="in_value" default="42"/>
+      <input_port name="other" default="43"/>
+    </SubTree>
+  </TreeNodesModel>
+
+  <BehaviorTree ID="MainTree">
+    <SubTree ID="MySub" _autoremap="true" />
+  </BehaviorTree>
+
+  <BehaviorTree ID="MySub">
+    <ScriptCondition code="in_value==7 &amp;&amp; other==43" />
+  </BehaviorTree>
+</root>)";
+
+  BehaviorTreeFactory factory;
+  auto root_bb = Blackboard::create();
+  root_bb->set("in_value", 7);
+  auto tree = factory.createTreeFromText(xml_text, root_bb);
+  EXPECT_EQ(tree.tickWhileRunning(), NodeStatus::SUCCESS);
+  EXPECT_FALSE(root_bb->getEntry("other"));
+}
+
+// Deliberate creation-time rule (#1271): the model default is applied only if no
+// entry named "in_value" exists in the parent blackboard chain when the tree is
+// CREATED. A key written later (here by a Script) does not win; to make the parent
+// value win, set the key in the blackboard before createTree (see test above).
+TEST(SubTree, SubtreeModelDefaultWithAutoremapCreationTimeRule)
+{
+  static const char* xml_text = R"(
+<root main_tree_to_execute="MainTree" BTCPP_format="4">
+  <TreeNodesModel>
+    <SubTree ID="MySub">
+      <input_port name="in_value" default="42"/>
+    </SubTree>
+  </TreeNodesModel>
+
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <Script code="in_value:=7" />
+      <SubTree ID="MySub" _autoremap="true" />
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="MySub">
+    <ScriptCondition code="in_value==42" />
+  </BehaviorTree>
+</root>)";
+
+  BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(xml_text);
+  EXPECT_EQ(tree.tickWhileRunning(), NodeStatus::SUCCESS);
+}
+
 class PrintToConsole : public BT::SyncActionNode
 {
 public:
@@ -815,7 +943,7 @@ TEST(SubTree, SubstringTreeIDsAreNotRecursive)
 // Test for Groot2 issue #56: duplicate _fullpath when multiple subtrees have the same name
 // https://github.com/BehaviorTree/Groot2/issues/56
 //
-// When two SubTree nodes under the same parent have the same "name" attribute,
+// When two SubTree nodes in the same tree have the same "name" attribute,
 // tree creation should fail with a clear error message.
 TEST(SubTree, DuplicateSubTreeName_Groot2Issue56)
 {
@@ -876,6 +1004,48 @@ TEST(SubTree, DuplicateSubTreeName_ErrorMessage)
         << "Error message should mention 'Duplicate SubTree path'. Got: " << msg;
     EXPECT_TRUE(msg.find("my_task") != std::string::npos)
         << "Error message should mention the duplicate path 'my_task'. Got: " << msg;
+  }
+}
+
+// The duplicate check covers the whole tree, so the message must not suggest
+// that moving one SubTree under another parent fixes it.
+TEST(SubTree, DuplicateSubTreeName_DifferentParents)
+{
+  // clang-format off
+  static const char* xml_text = R"(
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+    <BehaviorTree ID="MainTree">
+        <Fallback>
+            <Sequence>
+                <SubTree ID="Task" name="my_task"/>
+            </Sequence>
+            <Sequence>
+                <SubTree ID="Task" name="my_task"/>
+            </Sequence>
+        </Fallback>
+    </BehaviorTree>
+
+    <BehaviorTree ID="Task">
+        <AlwaysSuccess/>
+    </BehaviorTree>
+</root>
+)";
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+
+  try
+  {
+    (void)factory.createTreeFromText(xml_text);
+    FAIL() << "Expected RuntimeError to be thrown";
+  }
+  catch(const RuntimeError& e)
+  {
+    std::string msg = e.what();
+    EXPECT_TRUE(msg.find("Duplicate SubTree path") != std::string::npos)
+        << "Error message should mention 'Duplicate SubTree path'. Got: " << msg;
+    EXPECT_TRUE(msg.find("same parent") == std::string::npos)
+        << "Error message should not limit the rule to one parent. Got: " << msg;
   }
 }
 
@@ -975,8 +1145,8 @@ TEST(SubTree, NestedDuplicateNames_ShouldFail)
   ASSERT_THROW((void)factory.createTreeFromText(xml_text), RuntimeError);
 }
 
-// Regression test: literal numeric values passed to subtrees should preserve
-// their numeric type so that Script expressions can do arithmetic.
+// Regression test (#1121): Script expressions can do arithmetic with literal
+// numeric values passed to subtrees.
 TEST(SubTree, LiteralNumericPortsPreserveType)
 {
   // clang-format off
@@ -1011,4 +1181,295 @@ TEST(SubTree, LiteralNumericPortsPreserveType)
 
   const auto status = tree.tickWhileRunning();
   ASSERT_EQ(status, NodeStatus::SUCCESS);
+}
+
+// Issue #1246: a literal passed to a SubTree stays a string, so ports of different
+// types can read it, and its spelling is preserved.
+TEST(SubTree, LiteralPortsAreReadByAnyPortType)
+{
+  // clang-format off
+  static const char* xml_text = R"(
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+
+    <BehaviorTree ID="MainTree">
+        <SubTree ID="Sub" mode="1" code="007" />
+    </BehaviorTree>
+
+    <BehaviorTree ID="Sub">
+        <Sequence>
+            <ReadString value="{mode}" />
+            <ReadInt value="{mode}" />
+            <ReadDouble value="{mode}" />
+            <ReadString value="{code}" />
+        </Sequence>
+    </BehaviorTree>
+
+</root>
+)";
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+  std::vector<std::string> strings;
+  int int_val = 0;
+  double dbl_val = 0;
+  factory.registerSimpleAction("ReadString",
+                               [&](TreeNode& node) {
+                                 strings.push_back(
+                                     node.getInput<std::string>("value").value());
+                                 return NodeStatus::SUCCESS;
+                               },
+                               { InputPort<std::string>("value") });
+  factory.registerSimpleAction("ReadInt",
+                               [&](TreeNode& node) {
+                                 int_val = node.getInput<int>("value").value();
+                                 return NodeStatus::SUCCESS;
+                               },
+                               { InputPort<int>("value") });
+  factory.registerSimpleAction("ReadDouble",
+                               [&](TreeNode& node) {
+                                 dbl_val = node.getInput<double>("value").value();
+                                 return NodeStatus::SUCCESS;
+                               },
+                               { InputPort<double>("value") });
+
+  auto tree = factory.createTreeFromText(xml_text);
+  ASSERT_EQ(tree.tickWhileRunning(), NodeStatus::SUCCESS);
+  ASSERT_EQ(strings, (std::vector<std::string>{ "1", "007" }));
+  ASSERT_EQ(int_val, 1);
+  ASSERT_EQ(dbl_val, 1.0);
+}
+
+// Regression test: logical NOT should accept literal boolean values passed to
+// subtrees without changing their string representation in the blackboard.
+TEST(SubTree, LiteralBooleanPortsSupportLogicalNot)
+{
+  // clang-format off
+  static const char* xml_text = R"(
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+
+    <BehaviorTree ID="MainTree">
+        <SubTree ID="CheckBooleans" enabled="true" disabled="false"
+                 enabled_upper="TRUE" disabled_title="False"
+                 enabled_numeric="{enabled_numeric}"
+                 disabled_numeric="{disabled_numeric}" />
+    </BehaviorTree>
+
+    <BehaviorTree ID="CheckBooleans">
+        <Sequence>
+            <AlwaysSuccess _skipIf="!enabled" />
+            <ScriptCondition code="!disabled" />
+            <ScriptCondition code="!!enabled_upper" />
+            <ScriptCondition code="!disabled_title" />
+            <ScriptCondition code="!!enabled_numeric" />
+            <ScriptCondition code="!disabled_numeric" />
+        </Sequence>
+    </BehaviorTree>
+
+    <TreeNodesModel>
+        <SubTree ID="CheckBooleans">
+            <input_port name="enabled" type="bool" />
+            <input_port name="disabled" type="bool" />
+            <input_port name="enabled_upper" type="bool" />
+            <input_port name="disabled_title" type="bool" />
+            <input_port name="enabled_numeric" type="bool" />
+            <input_port name="disabled_numeric" type="bool" />
+        </SubTree>
+    </TreeNodesModel>
+
+</root>
+)";
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(xml_text);
+  tree.rootBlackboard()->set("enabled_numeric", std::string("1"));
+  tree.rootBlackboard()->set("disabled_numeric", std::string("0"));
+
+  ASSERT_EQ(tree.tickWhileRunning(), NodeStatus::SUCCESS);
+  ASSERT_EQ(tree.subtrees[1]->blackboard->get<std::string>("enabled"), "true");
+  ASSERT_EQ(tree.subtrees[1]->blackboard->get<std::string>("disabled"), "false");
+  ASSERT_EQ(tree.subtrees[1]->blackboard->get<std::string>("enabled_upper"), "TRUE");
+  ASSERT_EQ(tree.subtrees[1]->blackboard->get<std::string>("disabled_title"), "False");
+}
+
+TEST(SubTree, LiteralNonBooleanPortsRejectLogicalNot)
+{
+  // clang-format off
+  static const char* xml_text = R"(
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+
+    <BehaviorTree ID="MainTree">
+        <SubTree ID="CheckValue" value="1not_bool" />
+    </BehaviorTree>
+
+    <BehaviorTree ID="CheckValue">
+        <ScriptCondition code="!value" />
+    </BehaviorTree>
+
+</root>
+)";
+  // clang-format on
+
+  BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(xml_text);
+
+  ASSERT_THROW((void)tree.tickWhileRunning(), RuntimeError);
+  ASSERT_EQ(tree.subtrees[1]->blackboard->get<std::string>("value"), "1not_bool");
+}
+
+// A SubTree model can declare a port whose name no node can bind.
+// validatePortName only rejects a leading digit, while IsAllowedPortName, which
+// classifies instance attributes and which InputPort()/OutputPort() enforce,
+// requires an alphabetic first character. Before the fix the remapping below was
+// diverted into other_attributes and the SubTree read its declared default, with
+// no exception and no log.
+TEST(SubTree, DeclaredPortNameThatCannotBeBound)
+{
+  static const char* xml_text = R"(
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <Script code="outer:='from_parent'"/>
+      <SubTree ID="Sub" _myPort="{outer}"/>
+    </Sequence>
+  </BehaviorTree>
+  <BehaviorTree ID="Sub">
+    <AlwaysSuccess/>
+  </BehaviorTree>
+  <TreeNodesModel>
+    <SubTree ID="Sub">
+      <input_port name="_myPort" default="never_wired"/>
+    </SubTree>
+  </TreeNodesModel>
+</root>)";
+
+  BehaviorTreeFactory factory;
+  EXPECT_THROW(factory.createTreeFromText(xml_text), RuntimeError);
+}
+
+// The same underscore attribute on a SubTree that does not declare it is not a
+// port. It must keep landing in other_attributes and must not throw.
+TEST(SubTree, UndeclaredUnderscoreAttributeIsNotAPort)
+{
+  static const char* xml_text = R"(
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <SubTree ID="Sub" _my_editor_state="true"/>
+  </BehaviorTree>
+  <BehaviorTree ID="Sub">
+    <AlwaysSuccess/>
+  </BehaviorTree>
+  <TreeNodesModel>
+    <SubTree ID="Sub">
+      <input_port name="goal" default="g"/>
+    </SubTree>
+  </TreeNodesModel>
+</root>)";
+
+  BehaviorTreeFactory factory;
+  EXPECT_NO_THROW(factory.createTreeFromText(xml_text));
+}
+
+// A declared port nobody remaps stays inert and keeps loading, so existing trees
+// carrying such a declaration are unaffected.
+TEST(SubTree, DeclaredUnbindablePortLoadsWhenNotRemapped)
+{
+  static const char* xml_text = R"(
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <SubTree ID="Sub"/>
+  </BehaviorTree>
+  <BehaviorTree ID="Sub">
+    <AlwaysSuccess/>
+  </BehaviorTree>
+  <TreeNodesModel>
+    <SubTree ID="Sub">
+      <input_port name="_myPort" default="inert"/>
+    </SubTree>
+  </TreeNodesModel>
+</root>)";
+
+  BehaviorTreeFactory factory;
+  EXPECT_NO_THROW(factory.createTreeFromText(xml_text));
+}
+
+namespace
+{
+std::vector<const SubTreeNode*> collectSubTreeNodes(const Tree& tree)
+{
+  std::vector<const SubTreeNode*> nodes;
+  tree.applyVisitor([&](const TreeNode* node) {
+    if(const auto* subtree = dynamic_cast<const SubTreeNode*>(node))
+    {
+      nodes.push_back(subtree);
+    }
+  });
+  return nodes;
+}
+}  // namespace
+
+// Issue #1262: WriteTreeToXML dropped the [name] of SubTree nodes
+TEST(SubTree, WriteTreeToXML_KeepsSubTreeName)
+{
+  static const char* xml_text = R"(
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <SubTree ID="Worker" name="my_worker"/>
+  </BehaviorTree>
+  <BehaviorTree ID="Worker">
+    <AlwaysSuccess/>
+  </BehaviorTree>
+</root>)";
+
+  BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(xml_text);
+
+  const auto xml = WriteTreeToXML(tree, false, false);
+  EXPECT_NE(xml.find(R"(name="my_worker")"), std::string::npos) << xml;
+
+  // load the exported XML again: the instance name must survive the round trip
+  BehaviorTreeFactory factory2;
+  factory2.registerBehaviorTreeFromText(xml);
+  auto reloaded = factory2.createTree("MainTree");
+
+  const auto subtrees = collectSubTreeNodes(reloaded);
+  ASSERT_EQ(subtrees.size(), 1);
+  EXPECT_EQ(subtrees[0]->name(), "my_worker");
+  EXPECT_EQ(subtrees[0]->subtreeID(), "Worker");
+  EXPECT_EQ(reloaded.tickWhileRunning(), NodeStatus::SUCCESS);
+}
+
+// A SubTree without [name] must not get one in the exported XML. Otherwise, two
+// SubTrees with the same ID would get the same path and the XML could not be
+// loaded again (see DuplicateSubTreeName_Groot2Issue56).
+TEST(SubTree, WriteTreeToXML_NoNameAttributeIsNotAdded)
+{
+  static const char* xml_text = R"(
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <SubTree ID="Worker"/>
+      <SubTree ID="Worker"/>
+    </Sequence>
+  </BehaviorTree>
+  <BehaviorTree ID="Worker">
+    <AlwaysSuccess/>
+  </BehaviorTree>
+</root>)";
+
+  BehaviorTreeFactory factory;
+  auto tree = factory.createTreeFromText(xml_text);
+
+  const auto xml = WriteTreeToXML(tree, false, false);
+  EXPECT_EQ(xml.find(R"(name="Worker")"), std::string::npos) << xml;
+
+  BehaviorTreeFactory factory2;
+  factory2.registerBehaviorTreeFromText(xml);
+  Tree reloaded;
+  ASSERT_NO_THROW(reloaded = factory2.createTree("MainTree"));
+
+  const auto subtrees = collectSubTreeNodes(reloaded);
+  ASSERT_EQ(subtrees.size(), 2);
+  EXPECT_NE(subtrees[0]->fullPath(), subtrees[1]->fullPath());
+  EXPECT_EQ(reloaded.tickWhileRunning(), NodeStatus::SUCCESS);
 }
