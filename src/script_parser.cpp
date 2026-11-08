@@ -14,6 +14,7 @@
 
 #include "behaviortree_cpp/scripting/operators.hpp"
 
+#include <algorithm>
 #include <charconv>
 
 namespace BT
@@ -46,6 +47,24 @@ public:
 private:
   std::vector<Token> tokens_;
   size_t current_ = 0;
+  int depth_ = 0;
+
+  // Upper bound on the nesting of the recursive-descent grammar. Each open
+  // paren / unary prefix / right-hand operand adds one parseExpr frame, so a
+  // crafted expression like "((((...0...))))" would otherwise recurse until the
+  // native stack is exhausted. This mirrors the kMaxNestingDepth cap the XML
+  // parser already applies in VerifyXML and recursivelyCreateSubtree.
+  static constexpr int kMaxNestingDepth = 256;
+
+  // Height of the AST returned by the last parsePrefix() / parseExpr() call.
+  // A flat chain like "1+1+1+..." is parsed by the loop in parseExpr without
+  // recursing, but it builds a left-deep AST that evaluate() and the node
+  // destructors walk recursively, one frame per operator. Bounding the height
+  // bounds that recursion. It uses the same limit as kMaxNestingDepth: each
+  // level of evaluate() can take about 1 KB of stack in an unoptimized MSVC
+  // build, so 1024 levels overflowed the 1 MB default stack on Windows.
+  int height_ = 0;
+  static constexpr int kMaxExpressionHeight = kMaxNestingDepth;
 
   // Binding power constants.  Higher value = tighter binding.
   static constexpr int kAssignmentBP = 2;
@@ -157,18 +176,36 @@ private:
            type == TokenType::StarEqual || type == TokenType::SlashEqual;
   }
 
+  // Height of a node whose children are a subtree of height lhs_height and the
+  // expression parsed last (height_). Throws if the AST gets too tall.
+  int combinedHeight(int lhs_height) const
+  {
+    const int height = std::max(lhs_height, height_) + 1;
+    if(height > kMaxExpressionHeight)
+    {
+      throw RuntimeError(StrCat("Parse error at position ", std::to_string(peek().pos),
+                                ": expression is too long or too deeply nested (limit ",
+                                std::to_string(kMaxExpressionHeight), " levels)"));
+    }
+    return height;
+  }
+
   //--- Parsing ---
 
   /// Prefix: atoms and unary prefix operators
   Ast::expr_ptr parsePrefix()
   {
     const auto& tok = peek();
+    // literals and identifiers are leaves; the cases below that parse a
+    // subexpression overwrite it
+    height_ = 1;
 
     // Unary minus
     if(tok.type == TokenType::Minus)
     {
       advance();
       auto operand = parseExpr(kPrefixBP);
+      height_ = combinedHeight(0);
       return std::make_shared<Ast::ExprUnaryArithmetic>(Ast::ExprUnaryArithmetic::negate,
                                                         std::move(operand));
     }
@@ -177,6 +214,7 @@ private:
     {
       advance();
       auto operand = parseExpr(kPrefixBP);
+      height_ = combinedHeight(0);
       return std::make_shared<Ast::ExprUnaryArithmetic>(
           Ast::ExprUnaryArithmetic::complement, std::move(operand));
     }
@@ -185,6 +223,7 @@ private:
     {
       advance();
       auto operand = parseExpr(kPrefixBP);
+      height_ = combinedHeight(0);
       return std::make_shared<Ast::ExprUnaryArithmetic>(
           Ast::ExprUnaryArithmetic::logical_not, std::move(operand));
     }
@@ -210,14 +249,19 @@ private:
       int64_t val = 0;
       const char* first = tok.text.data();
       const char* last = first + tok.text.size();
-      if(tok.text.size() > 2 && tok.text[0] == '0' &&
-         (tok.text[1] == 'x' || tok.text[1] == 'X'))
+      const bool is_hex = tok.text.size() > 2 && tok.text[0] == '0' &&
+                          (tok.text[1] == 'x' || tok.text[1] == 'X');
+      const auto [ptr, ec] = is_hex ? std::from_chars(first + 2, last, val, 16) :
+                                      std::from_chars(first, last, val, 10);
+      // The tokenizer already guarantees the literal is made of (hex) digits, so
+      // the only remaining failure is result_out_of_range. from_chars leaves val
+      // untouched in that case, which would otherwise turn a literal like
+      // 0xFFFFFFFFFFFFFFFF into a silent 0.
+      if(ec != std::errc() || ptr != last)
       {
-        std::from_chars(first + 2, last, val, 16);
-      }
-      else
-      {
-        std::from_chars(first, last, val, 10);
+        throw RuntimeError(StrCat("Integer literal '", tok.text, "' at position ",
+                                  std::to_string(tok.pos),
+                                  " is out of range for a 64-bit integer"));
       }
       return std::make_shared<Ast::ExprLiteral>(Any(val));
     }
@@ -254,7 +298,20 @@ private:
   /// Main Pratt expression parser
   Ast::expr_ptr parseExpr(int minBP)
   {
+    // Bound the recursion so a deeply nested expression can't overflow the
+    // stack. Every open paren / unary prefix / right-hand operand adds one
+    // parseExpr frame; depth_ is decremented before the normal return below so
+    // it tracks the current nesting rather than the total call count. A parse
+    // failure throws and discards the parser, so the error paths need no reset.
+    if(++depth_ > kMaxNestingDepth)
+    {
+      throw RuntimeError(StrCat("Parse error at position ", std::to_string(peek().pos),
+                                ": expression nesting is too deep (limit ",
+                                std::to_string(kMaxNestingDepth), ")"));
+    }
+
     auto left = parsePrefix();
+    int left_height = height_;
 
     while(true)
     {
@@ -269,6 +326,7 @@ private:
       if(isAssignment(tokType))
       {
         left = parseAssignment(std::move(left));
+        left_height = combinedHeight(left_height);
         break;
       }
 
@@ -276,6 +334,7 @@ private:
       if(tokType == TokenType::Question)
       {
         left = parseTernary(std::move(left));
+        left_height = combinedHeight(left_height);
         break;
       }
 
@@ -283,6 +342,7 @@ private:
       if(isComparison(tokType))
       {
         left = parseChainedComparison(std::move(left));
+        left_height = combinedHeight(left_height);
         continue;
       }
 
@@ -291,8 +351,11 @@ private:
       // Right BP = LBP + 1 for left-associativity
       auto right = parseExpr(lbp + 1);
       left = makeBinary(std::move(left), opTok.type, std::move(right));
+      left_height = combinedHeight(left_height);
     }
 
+    --depth_;
+    height_ = left_height;
     return left;
   }
 
@@ -332,8 +395,10 @@ private:
   {
     advance();                     // consume '?'
     auto thenExpr = parseExpr(0);  // full expression inside
+    const int then_height = height_;
     expect(TokenType::Colon, "expected ':' in ternary expression");
     auto elseExpr = parseExpr(kTernaryBP);
+    height_ = std::max(then_height, height_);
     return std::make_shared<Ast::ExprIf>(std::move(condition), std::move(thenExpr),
                                          std::move(elseExpr));
   }
@@ -343,13 +408,16 @@ private:
     auto node = std::make_shared<Ast::ExprComparison>();
     node->operands.push_back(std::move(first));
 
+    int max_height = 0;
     while(isComparison(peek().type))
     {
       node->ops.push_back(mapComparisonOp(advance().type));
       // Parse the next operand above comparison level
       // so that arithmetic binds tighter
       node->operands.push_back(parseExpr(kComparisonBP + 1));
+      max_height = std::max(max_height, height_);
     }
+    height_ = max_height;
     return node;
   }
 
