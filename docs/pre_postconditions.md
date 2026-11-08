@@ -14,6 +14,8 @@ Pre-conditions are evaluated **before** a node's `tick()` method is called. They
 | `_successIf` | IDLE only | If true, return SUCCESS without calling tick() |
 | `_skipIf` | IDLE only | If true, return SKIPPED without calling tick() |
 | `_while` | IDLE and RUNNING | If false when IDLE, return SKIPPED. If false when RUNNING, halt node and return SKIPPED |
+| `_onlyIf` | IDLE only | If false, return SKIPPED without calling tick() (the opposite of `_skipIf`) |
+| `_onStart` | IDLE only | Not a condition: execute the script right before the first tick() |
 
 ### Evaluation Order
 
@@ -22,12 +24,16 @@ When a node has multiple pre-conditions, they are evaluated in this order:
 2. `_successIf`
 3. `_skipIf`
 4. `_while`
+5. `_onlyIf`
+6. `_onStart`
 
-The first condition that triggers will determine the result.
+The first condition that triggers will determine the result. `_onStart` comes last,
+so its script is executed only if no other pre-condition has short-circuited the node.
+If both `_skipIf` and `_onlyIf` are present, either one can skip the node.
 
 ### Important: One-time Evaluation
 
-**`_failureIf`, `_successIf`, and `_skipIf` are evaluated only once** when the node transitions from IDLE (or SKIPPED) to another state. They are **NOT re-evaluated** while the node is RUNNING.
+**`_failureIf`, `_successIf`, `_skipIf`, `_onlyIf` and `_onStart` are evaluated only once** when the node transitions from IDLE (or SKIPPED) to another state. They are **NOT re-evaluated** while the node is RUNNING.
 
 This means if you have:
 ```xml
@@ -48,23 +54,63 @@ If `battery_ok` becomes false while `MyAction` is running, the action is interru
 
 ### When to Use Each Pre-condition
 
-- **`_skipIf`**: Skip a node without failing the parent (useful in Sequences)
+- **`_skipIf`** / **`_onlyIf`**: Skip a node without failing the parent (useful in Sequences)
 - **`_failureIf`**: Fail early based on a condition (useful in Fallbacks)
 - **`_successIf`**: Succeed early based on a condition
 - **`_while`**: Guard that must remain true for the entire execution
+- **`_onStart`**: Initialize or reset blackboard entries when the node starts,
+  e.g. `<MyAction _onStart="attempts := 0"/>`
 
-### Re-evaluating Conditions Every Tick
+### Notes on `_onStart`
 
-If you need a condition to be checked on every tick (not just when transitioning from IDLE), use the `<Precondition>` decorator node instead of inline attributes:
+- It runs **every time the node starts from IDLE**, not once per tree execution. Inside a
+  `Retry` or `Repeat`, the child goes back to IDLE after each iteration, so
+  `_onStart="attempts := 0"` is re-executed on every iteration.
+  Likewise, a node placed before a RUNNING sibling in a `ReactiveSequence` is halted and
+  re-ticked from IDLE on every tick, so its `_onStart` runs on every tick.
+- It runs just before `tick()`, but a pre-tick callback (see `setPreTickFunction()`, used for
+  instance by Groot2 breakpoints and status injection) may still substitute the result after
+  `_onStart` has run, in which case `tick()` is not called.
+- `ThreadedAction` does not evaluate any pre-condition, `_onlyIf` and `_onStart` included:
+  it runs `tick()` in its own thread, bypassing the pre/post-condition checks.
+
+### The `<Precondition>` Decorator
+
+The `<Precondition>` decorator evaluates its `if` condition **once per activation** — when the node transitions from IDLE. Once its child returns RUNNING, the condition is **not** re-evaluated on subsequent ticks: the decorator keeps ticking the child until it completes, and only then re-checks the condition on the next activation.
 
 ```xml
-<!-- This checks the condition on every tick while child is RUNNING -->
-<Precondition if="my_condition" else="RUNNING">
+<!-- Evaluated at activation; NOT re-checked while the child is RUNNING -->
+<Precondition if="my_condition" else="FAILURE">
   <MyAction/>
 </Precondition>
 ```
 
-With `else="RUNNING"`, if the condition is false, the decorator returns RUNNING (keeping the tree alive) rather than SUCCESS/FAILURE/SKIPPED.
+This mirrors `_skipIf`/`_failureIf`/`_successIf`: a one-time gate at the start of a node, not a per-tick guard.
+
+### Re-evaluating Conditions Every Tick
+
+If you need a condition re-checked on **every** tick, you have two options:
+
+1. **Guard a running action** — use the `_while` attribute (the only pre-condition re-evaluated on every tick, including while the node is RUNNING):
+
+```xml
+<MyAction _while="battery_ok"/>
+```
+
+2. **Gate a sub-tree on every tick** — place the `<Precondition>` inside a `ReactiveSequence` and give it a child that completes immediately (e.g. `<AlwaysSuccess/>`). Because the child completes each tick, the decorator re-enters its activation check on the next cycle:
+
+```xml
+<ReactiveSequence>
+  <Precondition if="battery_ok" else="FAILURE">
+    <AlwaysSuccess/>
+  </Precondition>
+  <Sequence>
+    ...
+  </Sequence>
+</ReactiveSequence>
+```
+
+If the child inside `<Precondition>` stays RUNNING, the condition is not re-checked until that child completes.
 
 ## Post-conditions
 

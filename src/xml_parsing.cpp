@@ -12,12 +12,11 @@
 
 #include "behaviortree_cpp/basic_types.h"
 
-#include <charconv>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <functional>
 #include <iostream>
-#include <limits>
 #include <list>
 #include <sstream>
 #include <string>
@@ -47,7 +46,9 @@
 #include "behaviortree_cpp/xml_parsing.h"
 
 #include <filesystem>
+#include <iterator>
 #include <map>
+#include <unordered_map>
 
 #ifdef USING_ROS2
 #include "ament_index_cpp/version.h"
@@ -57,6 +58,8 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #endif
 #endif
+
+#include "schematron_template.gen.h"
 
 #include "behaviortree_cpp/blackboard.h"
 #include "behaviortree_cpp/tree_node.h"
@@ -103,14 +106,13 @@ auto StrEqual = [](const char* str1, const char* str2) -> bool {
   return strcmp(str1, str2) == 0;
 };
 
-// Helper to format forbidden character for error messages
-std::string formatForbiddenChar(char c)
+// Normalized form of an included file path, so that different spellings of
+// the same file ("a.xml", "./a.xml", "dir/../a.xml") compare equal.
+std::filesystem::path IncludeKey(const std::filesystem::path& absolute_path)
 {
-  if(c < 32 || c == 127)
-  {
-    return "control character (ASCII " + std::to_string(static_cast<int>(c)) + ")";
-  }
-  return std::string("'") + c + "'";
+  std::error_code err;
+  auto canonical = std::filesystem::weakly_canonical(absolute_path, err);
+  return err ? absolute_path.lexically_normal() : canonical;
 }
 
 void validateModelName(const std::string& name, int line_number)
@@ -246,12 +248,34 @@ struct XMLParser::PImpl
 
   void loadDocImpl(XMLDocument* doc, bool add_includes);
 
+  // Load the document just appended to opened_documents. A document that is
+  // rejected (XML error, invalid tree) registers no tree, so forget it again:
+  // it would otherwise remain the "first opened document" that
+  // instantiateTree() reads main_tree_to_execute from, and a document that
+  // did not parse has no root element at all.
+  void loadLastDocImpl(bool add_includes)
+  {
+    const auto doc_it = std::prev(opened_documents.end());
+    try
+    {
+      loadDocImpl(doc_it->get(), add_includes);
+    }
+    catch(...)
+    {
+      opened_documents.erase(doc_it);
+      throw;
+    }
+  }
+
   std::list<std::unique_ptr<XMLDocument> > opened_documents;
   std::map<std::string, const XMLElement*> tree_roots;
+  std::unordered_map<std::string, std::string> tree_sources;
 
   const BehaviorTreeFactory* factory = nullptr;
 
   std::filesystem::path current_path;
+  // files currently being loaded through <include>, used to detect cycles
+  std::vector<std::filesystem::path> include_stack;
   std::map<std::string, SubtreeModel> subtree_models;
 
   int suffix_count = 0;
@@ -266,6 +290,7 @@ struct XMLParser::PImpl
     current_path = std::filesystem::current_path();
     opened_documents.clear();
     tree_roots.clear();
+    tree_sources.clear();
   }
 
 private:
@@ -299,8 +324,9 @@ void XMLParser::loadFromFile(const std::filesystem::path& filepath, bool add_inc
   doc->LoadFile(filepath.string().c_str());
 
   _p->current_path = std::filesystem::absolute(filepath.parent_path());
+  _p->include_stack = { IncludeKey(std::filesystem::absolute(filepath)) };
 
-  _p->loadDocImpl(doc, add_includes);
+  _p->loadLastDocImpl(add_includes);
 }
 
 void XMLParser::loadFromText(const std::string& xml_text, bool add_includes)
@@ -310,7 +336,8 @@ void XMLParser::loadFromText(const std::string& xml_text, bool add_includes)
   XMLDocument* doc = _p->opened_documents.back().get();
   doc->Parse(xml_text.c_str(), xml_text.size());
 
-  _p->loadDocImpl(doc, add_includes);
+  _p->include_stack.clear();
+  _p->loadLastDocImpl(add_includes);
 }
 
 std::vector<std::string> XMLParser::registeredBehaviorTrees() const
@@ -424,6 +451,16 @@ void XMLParser::PImpl::loadDocImpl(XMLDocument* doc, bool add_includes)
       file_path = current_path / file_path;
     }
 
+    // A file that includes itself, directly or through other files, would
+    // otherwise recurse until the stack overflows.
+    auto include_key = IncludeKey(file_path);
+    if(std::find(include_stack.begin(), include_stack.end(), include_key) !=
+       include_stack.end())
+    {
+      throw RuntimeError("Cyclic <include> detected: the file [", include_key.string(),
+                         "] includes itself, directly or through other files");
+    }
+
     opened_documents.push_back(std::make_unique<XMLDocument>());
     XMLDocument* next_doc = opened_documents.back().get();
 
@@ -431,8 +468,10 @@ void XMLParser::PImpl::loadDocImpl(XMLDocument* doc, bool add_includes)
     const auto previous_path = current_path;
     current_path = std::filesystem::absolute(file_path.parent_path());
 
+    include_stack.push_back(std::move(include_key));
     next_doc->LoadFile(file_path.string().c_str());
-    loadDocImpl(next_doc, add_includes);
+    loadLastDocImpl(add_includes);
+    include_stack.pop_back();
 
     // reset current path to the previous value
     current_path = previous_path;
@@ -455,6 +494,9 @@ void XMLParser::PImpl::loadDocImpl(XMLDocument* doc, bool add_includes)
   loadSubtreeModel(xml_root);
 
   // Register each BehaviorTree within the XML
+  const std::string source =
+      include_stack.empty() ? "<inline XML>" : include_stack.back().string();
+  std::unordered_set<std::string> ids_in_document;
   for(auto bt_node = xml_root->FirstChildElement("BehaviorTree"); bt_node != nullptr;
       bt_node = bt_node->NextSiblingElement("BehaviorTree"))
   {
@@ -468,7 +510,20 @@ void XMLParser::PImpl::loadDocImpl(XMLDocument* doc, bool add_includes)
       tree_name = "BehaviorTree_" + std::to_string(suffix_count++);
     }
 
+    // An ID that is already registered is replaced by the new definition.
+    // Warn when the previous one came from another source, or from this same
+    // document; reloading a file, or including it twice, stays silent.
+    const auto previous = tree_sources.find(tree_name);
+    const bool repeated_in_document = !ids_in_document.insert(tree_name).second;
+    if(repeated_in_document ||
+       (previous != tree_sources.end() && previous->second != source))
+    {
+      std::cout << "Warning: BehaviorTree ID [" << tree_name << "] in [" << source
+                << "] replaces the one previously registered from ["
+                << (repeated_in_document ? source : previous->second) << "]" << std::endl;
+    }
     tree_roots[tree_name] = bt_node;
+    tree_sources[tree_name] = source;
   }
 }
 
@@ -617,11 +672,8 @@ void VerifyXML(const std::string& xml_text,
     {
       // use ID for builtin node types, otherwise use the element name
       const auto lookup_name = is_builtin ? ID : name;
-      // Validate model name for custom node types (non-builtin element names)
-      if(!is_builtin)
-      {
-        validateModelName(name, line_number);
-      }
+      // Validate the resolved node type name for both compact and explicit forms.
+      validateModelName(lookup_name, line_number);
       const auto search = registered_nodes.find(lookup_name);
       const bool found = (search != registered_nodes.end());
       if(!found)
@@ -652,6 +704,11 @@ void VerifyXML(const std::string& xml_text,
           ThrowError(line_number, std::string("The node 'TryCatch' must have "
                                               "at least 2 children"));
         }
+        if(registered_name == "Finally" && children_count != 2)
+        {
+          ThrowError(line_number, std::string("The node 'Finally' must have "
+                                              "exactly 2 children"));
+        }
         if(registered_name == "ReactiveSequence")
         {
           size_t async_count = 0;
@@ -666,10 +723,11 @@ void VerifyXML(const std::string& xml_text,
                          std::string("Unknown node type: ") + child_name);
             }
             const auto child_type = child_search->second;
+            // Only the asynchronous CONTROL nodes can be detected here: the
+            // manifest does not record whether an ACTION is asynchronous, so
+            // async leaf actions are not caught.
             if(child_type == NodeType::CONTROL &&
-               ((child_name == "ThreadedAction") ||
-                (child_name == "StatefulActionNode") ||
-                (child_name == "CoroActionNode") || (child_name == "AsyncSequence")))
+               ((child_name == "AsyncSequence") || (child_name == "AsyncFallback")))
             {
               ++async_count;
               if(async_count > 1)
@@ -714,6 +772,10 @@ Tree XMLParser::instantiateTree(const Blackboard::Ptr& root_blackboard,
   // or the one in the FIRST document opened
   if(main_tree_ID.empty())
   {
+    if(_p->opened_documents.empty())
+    {
+      throw RuntimeError("XMLParser::instantiateTree: no XML document was loaded");
+    }
     XMLElement* first_xml_root = _p->opened_documents.front()->RootElement();
 
     if(auto main_tree_attribute = first_xml_root->Attribute("main_tree_to_execute"))
@@ -857,6 +919,29 @@ TreeNode::Ptr XMLParser::PImpl::createNodeFromXML(const XMLElement* element,
     }
     else if(!IsReservedAttribute(port_name))
     {
+      // The name may still match a declared port. validatePortName only rejects
+      // a leading digit, so a SubTree model can declare
+      // <input_port name="_myPort"/>, a name IsAllowedPortName refuses and no
+      // C++ InputPort() can create. Falling through to other_attributes would
+      // drop the remapping without a word and leave the node on its declared
+      // default, so report it instead.
+      bool is_declared_port = manifest != nullptr && manifest->ports.count(port_name) > 0;
+      if(!is_declared_port && node_type == NodeType::SUBTREE)
+      {
+        auto model_it = subtree_models.find(type_ID);
+        is_declared_port = model_it != subtree_models.end() &&
+                           model_it->second.ports.count(port_name) > 0;
+      }
+      if(is_declared_port)
+      {
+        const std::string reason = " and is declared, but the name cannot be used"
+                                   " as a port. A port name must begin with an"
+                                   " alphabetic character. Rename the port, for"
+                                   " example [_my_port] to [my_port].";
+        throw RuntimeError(StrCat("A port with name [", port_name,
+                                  "] is found in the XML (", type_ID, ", line ",
+                                  std::to_string(element->GetLineNum()), ")", reason));
+      }
       other_attributes[port_name] = port_value;
     }
   }
@@ -1130,6 +1215,18 @@ void BT::XMLParser::PImpl::recursivelyCreateSubtree(
         for(const auto& [port_name, port_info] : subtree_model_ports)
         {
           auto it = subtree_remapping.find(port_name);
+          const auto& default_value = port_info.defaultValueString();
+          // _autoremap shares the port with the parent key of the same name; if
+          // that key doesn't exist (yet), an input port gets its literal default
+          // (#1271). NOTE: checked at creation time, so a parent key created
+          // later (e.g. by a Script) is shadowed by the default.
+          if(it == subtree_remapping.end() && do_autoremap &&
+             port_info.direction() == PortDirection::INPUT && !default_value.empty() &&
+             !TreeNode::isBlackboardPointer(default_value) &&
+             !new_bb->getEntry(port_name))
+          {
+            subtree_remapping.insert({ port_name, default_value });
+          }
           // don't override existing remapping
           if(it == subtree_remapping.end() && !do_autoremap)
           {
@@ -1159,58 +1256,12 @@ void BT::XMLParser::PImpl::recursivelyCreateSubtree(
         }
         else
         {
-          // constant value: set it into the BB with appropriate type
+          // constant string: just set that constant value into the BB.
+          // It must stay a string, so that each port converts it to its own type
+          // (#1246); Script arithmetic converts numeric strings when needed.
           // IMPORTANT: this must not be autoremapped!!!
           new_bb->enableAutoRemapping(false);
-          const std::string str_value(attr_value);
-
-          // Try to preserve numeric types so that Script expressions
-          // can perform arithmetic without type-mismatch errors.
-          // Use std::from_chars with strict full-string validation to avoid
-          // false positives on compound strings like "1;2;3" or "2.2;2.4".
-          bool stored = false;
-          if(!str_value.empty())
-          {
-            const char* begin = str_value.data();
-            const char* end = begin + str_value.size();
-            // Try integer first (no decimal point, no exponent notation).
-            // Use int when the value fits, to match the most common port
-            // declarations. Fall back to int64_t for larger values.
-            if(str_value.find('.') == std::string::npos &&
-               str_value.find('e') == std::string::npos &&
-               str_value.find('E') == std::string::npos)
-            {
-              int64_t int_val = 0;
-              auto [ptr, ec] = std::from_chars(begin, end, int_val);
-              if(ec == std::errc() && ptr == end)
-              {
-                if(int_val >= std::numeric_limits<int>::min() &&
-                   int_val <= std::numeric_limits<int>::max())
-                {
-                  new_bb->set(attr_name, static_cast<int>(int_val));
-                }
-                else
-                {
-                  new_bb->set(attr_name, int_val);
-                }
-                stored = true;
-              }
-            }
-            // Try double
-            if(!stored)
-            {
-              double dbl_val = 0;
-              if(parseDouble(str_value, dbl_val, /*require_full_consumption=*/true))
-              {
-                new_bb->set(attr_name, dbl_val);
-                stored = true;
-              }
-            }
-          }
-          if(!stored)
-          {
-            new_bb->set(attr_name, str_value);
-          }
+          new_bb->set(attr_name, static_cast<std::string>(attr_value));
           new_bb->enableAutoRemapping(do_autoremap);
         }
       }
@@ -1236,8 +1287,8 @@ void BT::XMLParser::PImpl::recursivelyCreateSubtree(
         if(sub->instance_name == subtree_path)
         {
           throw RuntimeError("Duplicate SubTree path detected: '", subtree_path,
-                             "'. Multiple SubTree nodes with the same 'name' attribute "
-                             "under the same parent are not allowed. "
+                             "'. SubTree nodes in the same tree cannot share a 'name' "
+                             "attribute, even under different parent nodes. "
                              "Please use unique names or omit the 'name' attribute "
                              "to auto-generate unique paths.");
         }
@@ -1301,8 +1352,24 @@ void addNodeModelToXML(const TreeNodeManifest& model, XMLDocument& doc,
   XMLElement* element = doc.NewElement(toStr(model.type).c_str());
   element->SetAttribute("ID", model.registration_ID.c_str());
 
-  for(const auto& [port_name, port_info] : model.ports)
+  // PortsList is unordered: sort by direction, then by name, so that the
+  // output (and the order shown in Groot2) is deterministic.
+  std::vector<const PortsList::value_type*> sorted_ports;
+  sorted_ports.reserve(model.ports.size());
+  for(const auto& port : model.ports)
   {
+    sorted_ports.push_back(&port);
+  }
+  std::sort(sorted_ports.begin(), sorted_ports.end(),
+            [](const auto* lhs, const auto* rhs) {
+              const auto lhs_dir = lhs->second.direction();
+              const auto rhs_dir = rhs->second.direction();
+              return lhs_dir != rhs_dir ? lhs_dir < rhs_dir : lhs->first < rhs->first;
+            });
+
+  for(const auto* port : sorted_ports)
+  {
+    const auto& [port_name, port_info] = *port;
     XMLElement* port_element = nullptr;
     switch(port_info.direction())
     {
@@ -1356,12 +1423,18 @@ void addTreeToXML(const Tree& tree, XMLDocument& doc, XMLElement* rootXML,
 {
   std::function<void(const TreeNode&, XMLElement*)> addNode;
   addNode = [&](const TreeNode& node, XMLElement* parent_elem) {
-    XMLElement* elem = nullptr;
+    XMLElement* elem = doc.NewElement(node.registrationName().c_str());
 
     if(const auto* subtree = dynamic_cast<const SubTreeNode*>(&node))
     {
-      elem = doc.NewElement(node.registrationName().c_str());
       elem->SetAttribute("ID", subtree->subtreeID().c_str());
+      // Without [name], the parser uses the ID as instance name and generates a
+      // unique path. Write [name] only when it differs from the ID: writing it
+      // always would make SubTrees with the same ID collide when reloaded.
+      if(node.name() != subtree->subtreeID())
+      {
+        elem->SetAttribute("name", node.name().c_str());
+      }
       if(add_metadata)
       {
         elem->SetAttribute("_fullpath", subtree->config().path.c_str());
@@ -1369,7 +1442,6 @@ void addTreeToXML(const Tree& tree, XMLDocument& doc, XMLElement* rootXML,
     }
     else
     {
-      elem = doc.NewElement(node.registrationName().c_str());
       elem->SetAttribute("name", node.name().c_str());
     }
 
@@ -1446,6 +1518,14 @@ void addTreeToXML(const Tree& tree, XMLDocument& doc, XMLElement* rootXML,
     addNodeModelToXML(*model, doc, model_root);
   }
 }
+
+// "major.minor" of this library, written in the [BTCPP_version] attribute of <root>.
+// It is informative only (e.g. for Groot2): the parser ignores it.
+std::string libraryMajorMinorVersion()
+{
+  const std::string version = LibraryVersionString();
+  return version.substr(0, version.rfind('.'));
+}
 }  // namespace
 
 std::string writeTreeNodesModelXML(const BehaviorTreeFactory& factory,
@@ -1455,6 +1535,7 @@ std::string writeTreeNodesModelXML(const BehaviorTreeFactory& factory,
 
   XMLElement* rootXML = doc.NewElement("root");
   rootXML->SetAttribute("BTCPP_format", "4");
+  rootXML->SetAttribute("BTCPP_version", libraryMajorMinorVersion().c_str());
   doc.InsertFirstChild(rootXML);
 
   XMLElement* model_root = doc.NewElement("TreeNodesModel");
@@ -1482,16 +1563,23 @@ std::string writeTreeNodesModelXML(const BehaviorTreeFactory& factory,
 
 std::string writeTreeXSD(const BehaviorTreeFactory& factory)
 {
+  return writeTreeXSD(factory, false);
+}
+
+std::string writeTreeXSD(const BehaviorTreeFactory& factory, bool generic)
+{
   // There are 2 forms of representation for a node:
   // compact: <Sequence .../>  and explicit: <Control ID="Sequence" ... />
   // Only the compact form is supported because the explicit form doesn't
   // make sense with XSD since we would need to allow any attribute.
   // Prepare the data
 
+  const auto& builtin_set = factory.builtinNodes();
   std::map<std::string, const TreeNodeManifest*> ordered_models;
   for(const auto& [registration_id, model] : factory.manifests())
   {
-    ordered_models.insert({ registration_id, &model });
+    if(!generic || builtin_set.count(registration_id) != 0)
+      ordered_models.insert({ registration_id, &model });
   }
 
   XMLDocument doc;
@@ -1572,8 +1660,19 @@ std::string writeTreeXSD(const BehaviorTreeFactory& factory)
         </xs:extension>
       </xs:simpleContent>
     </xs:complexType>
+    <xs:complexType name="inoutPortType">
+      <xs:simpleContent>
+        <xs:extension base="xs:string">
+          <xs:attribute name="name" type="xs:string" use="required"/>
+          <xs:attribute name="type" type="xs:string" use="optional"/>
+          <xs:attribute name="default" type="xs:string" use="optional"/>
+        </xs:extension>
+      </xs:simpleContent>
+    </xs:complexType>
     <xs:attributeGroup name="preconditionAttributeGroup">
       <xs:attribute name="_failureIf" type="xs:string" use="optional"/>
+      <xs:attribute name="_onlyIf" type="xs:string" use="optional"/>
+      <xs:attribute name="_onStart" type="xs:string" use="optional"/>
       <xs:attribute name="_skipIf" type="xs:string" use="optional"/>
       <xs:attribute name="_successIf" type="xs:string" use="optional"/>
       <xs:attribute name="_while" type="xs:string" use="optional"/>
@@ -1605,6 +1704,7 @@ std::string writeTreeXSD(const BehaviorTreeFactory& factory)
         <xs:choice minOccurs="0" maxOccurs="unbounded">
           <xs:element name="input_port" type="inputPortType"/>
           <xs:element name="output_port" type="outputPortType"/>
+          <xs:element name="inout_port" type="inoutPortType"/>
         </xs:choice>
         <xs:element name="description" type="descriptionType" minOccurs="0" maxOccurs="1"/>
       </xs:sequence>
@@ -1633,6 +1733,7 @@ std::string writeTreeXSD(const BehaviorTreeFactory& factory)
         </xs:sequence>
         <xs:attribute name="BTCPP_format" type="xs:string" use="required"/>
         <xs:attribute name="main_tree_to_execute" type="xs:string" use="optional"/>
+        <xs:attribute name="BTCPP_version" type="xs:string" use="optional"/>
       </xs:complexType>
     </xs:element>
   )";
@@ -1642,15 +1743,27 @@ std::string writeTreeXSD(const BehaviorTreeFactory& factory)
   XMLElement* one_node_group = doc.NewElement("xs:group");
   {
     one_node_group->SetAttribute("name", "oneNodeGroup");
-    std::ostringstream xsd;
-    xsd << "<xs:choice>";
-    for(const auto& [registration_id, model] : ordered_models)
+    if(generic)
     {
-      xsd << "<xs:element name=\"" << registration_id << "\" type=\"" << registration_id
-          << "Type\"/>";
+      // Generic: accept any element; lax processing validates known built-ins
+      // via the top-level xs:element declarations emitted at the end of this function.
+      parse_and_insert(one_node_group, "<xs:choice>"
+                                       "<xs:any namespace=\"##any\" "
+                                       "processContents=\"lax\"/>"
+                                       "</xs:choice>");
     }
-    xsd << "</xs:choice>";
-    parse_and_insert(one_node_group, xsd.str().c_str());
+    else
+    {
+      std::ostringstream xsd;
+      xsd << "<xs:choice>";
+      for(const auto& [registration_id, model] : ordered_models)
+      {
+        xsd << "<xs:element name=\"" << registration_id << "\" type=\"" << registration_id
+            << "Type\"/>";
+      }
+      xsd << "</xs:choice>";
+      parse_and_insert(one_node_group, xsd.str().c_str());
+    }
     schema_element->InsertEndChild(one_node_group);
   }
 
@@ -1717,8 +1830,12 @@ std::string writeTreeXSD(const BehaviorTreeFactory& factory)
     XMLElement* common_attr_group = doc.NewElement("xs:attributeGroup");
     common_attr_group->SetAttribute("ref", "commonAttributeGroup");
     type->InsertEndChild(common_attr_group);
+    std::map<std::string, const BT::PortInfo*> ordered_ports;
     for(const auto& [port_name, port_info] : model->ports)
+      ordered_ports.insert({ port_name, &port_info });
+    for(const auto& [port_name, port_info_ptr] : ordered_ports)
     {
+      const auto& port_info = *port_info_ptr;
       XMLElement* attr = doc.NewElement("xs:attribute");
       attr->SetAttribute("name", port_name.c_str());
       const auto xsd_attribute_type = xsdAttributeType(port_info);
@@ -1746,9 +1863,52 @@ std::string writeTreeXSD(const BehaviorTreeFactory& factory)
     schema_element->InsertEndChild(type);
   }
 
+  // Generic mode: emit top-level xs:element declarations so that
+  // processContents="lax" in oneNodeGroup can resolve and validate
+  // known built-in node elements by name.
+  if(generic)
+  {
+    for(const auto& [registration_id, model] : ordered_models)
+    {
+      XMLElement* elem = doc.NewElement("xs:element");
+      elem->SetAttribute("name", registration_id.c_str());
+      elem->SetAttribute("type", (registration_id + "Type").c_str());
+      schema_element->InsertEndChild(elem);
+    }
+  }
+
   XMLPrinter printer;
   doc.Print(&printer);
   return std::string(printer.CStr(), size_t(printer.CStrSize() - 1));
+}
+
+std::string writeTreeSchematron(const BehaviorTreeFactory& factory)
+{
+  // Build the pipe-delimited builtin node list, e.g. "|AlwaysFailure|Fallback|...|",
+  // then substitute the ##BUILTIN_PIPE## placeholder in the embedded template.
+  // The template itself lives in src/btcpp4_schematron.sch (human-readable);
+  // schematron_template.gen.h is generated from it by CMake.
+  std::ostringstream builtin_pipe_ss;
+  builtin_pipe_ss << "|";
+  for(const auto& name : factory.builtinNodes())
+    builtin_pipe_ss << name << "|";
+
+  std::string result = BT::detail::schematron_template;
+  const std::string placeholder = "##BUILTIN_PIPE##";
+  const std::string builtin_pipe = builtin_pipe_ss.str();
+  int replacements = 0;
+
+  for(std::size_t pos = result.find(placeholder); pos != std::string::npos;
+      pos = result.find(placeholder, pos))
+  {
+    result.replace(pos, placeholder.size(), builtin_pipe);
+    pos += builtin_pipe.size();
+    ++replacements;
+  }
+  if(replacements == 0)
+    throw RuntimeError("writeTreeSchematron: placeholder '", placeholder,
+                       "' not found in schematron template");
+  return result;
 }
 
 std::string WriteTreeToXML(const Tree& tree, bool add_metadata, bool add_builtin_models)
@@ -1757,6 +1917,7 @@ std::string WriteTreeToXML(const Tree& tree, bool add_metadata, bool add_builtin
 
   XMLElement* rootXML = doc.NewElement("root");
   rootXML->SetAttribute("BTCPP_format", 4);
+  rootXML->SetAttribute("BTCPP_version", libraryMajorMinorVersion().c_str());
   doc.InsertFirstChild(rootXML);
 
   addTreeToXML(tree, doc, rootXML, add_metadata, add_builtin_models);
