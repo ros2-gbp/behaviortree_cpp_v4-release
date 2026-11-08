@@ -10,7 +10,6 @@
 #include <behaviortree_cpp/loggers/groot2_protocol.h>
 #include <behaviortree_cpp/loggers/groot2_publisher.h>
 
-#include <behaviortree_cpp/contrib/json.hpp>
 #include <zmq_addon.hpp>
 
 namespace Groot2Test
@@ -21,7 +20,8 @@ struct PublisherAndPort
   unsigned port = 0;
 };
 
-inline PublisherAndPort makePublisher(const BT::Tree& tree)
+inline PublisherAndPort makePublisher(const BT::Tree& tree,
+                                      const std::string& bind_address = "*")
 {
   std::random_device random_device;
   std::uniform_int_distribution<unsigned> port_distribution(20000, 60000);
@@ -33,7 +33,7 @@ inline PublisherAndPort makePublisher(const BT::Tree& tree)
     const unsigned port = port_distribution(random_device) & ~1U;
     try
     {
-      return { std::make_unique<BT::Groot2Publisher>(tree, port), port };
+      return { std::make_unique<BT::Groot2Publisher>(tree, port, bind_address), port };
     }
     catch(const zmq::error_t& error)
     {
@@ -61,11 +61,11 @@ inline nlohmann::json makeHook(uint16_t uid, BT::Monitor::Hook::Mode mode,
 class Client
 {
 public:
-  explicit Client(unsigned port) : socket_(context_, ZMQ_REQ)
+  explicit Client(unsigned port, int timeout_ms = 2000) : socket_(context_, ZMQ_REQ)
   {
     socket_.set(zmq::sockopt::linger, 0);
-    socket_.set(zmq::sockopt::rcvtimeo, 2000);
-    socket_.set(zmq::sockopt::sndtimeo, 2000);
+    socket_.set(zmq::sockopt::rcvtimeo, timeout_ms);
+    socket_.set(zmq::sockopt::sndtimeo, timeout_ms);
     socket_.connect("tcp://127.0.0.1:" + std::to_string(port));
   }
 
