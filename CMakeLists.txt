@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16.3) # version on Ubuntu Focal
 
-project(behaviortree_cpp VERSION 4.10.0 LANGUAGES C CXX)
+project(behaviortree_cpp VERSION 4.11.0 LANGUAGES C CXX)
 
 # create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -25,6 +25,7 @@ option(FORCE_STATIC_LINKING "Force static linking of all dependencies" OFF)
 
 option(USE_VENDORED_CPPZMQ "Use the bundled version of cppzmq" ON)
 option(USE_VENDORED_FLATBUFFERS "Use the bundled version of flatbuffers" ON)
+option(USE_VENDORED_JSON "Use the bundled version of nlohmann/json" ON)
 option(USE_VENDORED_MINICORO "Use the bundled version of minicoro" ON)
 option(USE_VENDORED_MINITRACE "Use the bundled version of minitrace" ON)
 
@@ -133,6 +134,10 @@ else()
     find_package(flatbuffers REQUIRED)
 endif()
 
+if(NOT USE_VENDORED_JSON)
+    find_package(nlohmann_json 3.10 REQUIRED)
+endif()
+
 if(USE_VENDORED_MINICORO)
     add_subdirectory(3rdparty/minicoro)
 else()
@@ -182,6 +187,7 @@ list(APPEND BT_SOURCE
     src/controls/sequence_node.cpp
     src/controls/sequence_with_memory_node.cpp
     src/controls/switch_node.cpp
+    src/controls/finally_node.cpp
     src/controls/try_catch_node.cpp
     src/controls/while_do_else_node.cpp
 
@@ -212,6 +218,18 @@ if (WIN32)
     set(CMAKE_DEBUG_POSTFIX "d")
     list(APPEND BT_SOURCE src/shared_library_WIN.cpp )
 endif()
+
+# Embed src/btcpp4_schematron.sch as a C++ string constant.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/btcpp4_schematron.sch"
+)
+
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/btcpp4_schematron.sch" BTCPP_SCHEMATRON_TEMPLATE)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/schematron_template.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/schematron_template.gen.h"
+    @ONLY
+)
 
 if (BTCPP_SHARED_LIBS)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
@@ -255,9 +273,16 @@ target_include_directories(${BTCPP_LIBRARY}
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${BTCPP_EXTRA_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_BINARY_DIR}/generated
     )
 
-target_compile_definitions(${BTCPP_LIBRARY} PUBLIC BTCPP_LIBRARY_VERSION="${CMAKE_PROJECT_VERSION}")
+target_compile_definitions(${BTCPP_LIBRARY} PUBLIC BTCPP_LIBRARY_VERSION="${PROJECT_VERSION}")
+
+if(NOT USE_VENDORED_JSON)
+    # The public headers include <nlohmann/json.hpp> instead of the bundled copy
+    target_compile_definitions(${BTCPP_LIBRARY} PUBLIC BTCPP_SYSTEM_JSON)
+    target_link_libraries(${BTCPP_LIBRARY} PUBLIC nlohmann_json::nlohmann_json)
+endif()
 
 target_compile_features(${BTCPP_LIBRARY} PUBLIC cxx_std_17)
 
@@ -327,8 +352,14 @@ INSTALL(TARGETS ${BTCPP_LIBRARY}
     INCLUDES DESTINATION ${BTCPP_INCLUDE_DESTINATION}
     )
 
+if(NOT USE_VENDORED_JSON)
+    # Don't install the bundled copy: a user that doesn't get BTCPP_SYSTEM_JSON
+    # must fail to compile, rather than mix two versions of nlohmann::json
+    set(BTCPP_INSTALL_EXCLUDE REGEX "contrib/json\\.hpp$" EXCLUDE)
+endif()
+
 INSTALL( DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
     DESTINATION ${BTCPP_INCLUDE_DESTINATION}
-    FILES_MATCHING PATTERN "*.h*")
+    FILES_MATCHING PATTERN "*.h*" ${BTCPP_INSTALL_EXCLUDE})
 
 export_btcpp_package()
