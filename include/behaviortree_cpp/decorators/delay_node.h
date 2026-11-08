@@ -48,7 +48,9 @@ public:
     // so the child can outlive or predecease this decorator. halt() ->
     // DecoratorNode::halt() -> resetChild() dereferences that child and
     // segfaults on libc++ (macOS). This mirrors TimeoutNode's destructor.
-    timer_.cancelAll();
+    // Join the timer thread here: timer_ is the first member, so it is destroyed
+    // after delay_mutex_, which its handler locks.
+    timer_.stop();
   }
 
   DelayNode(const DelayNode&) = delete;
@@ -65,6 +67,7 @@ public:
   void halt() override;
 
 private:
+  // Member order is frozen for ABI compatibility: do not reorder.
   TimerQueue<> timer_;
   uint64_t timer_id_;
 
