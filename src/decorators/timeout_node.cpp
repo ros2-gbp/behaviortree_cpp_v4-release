@@ -12,6 +12,8 @@
 
 #include "behaviortree_cpp/decorators/timeout_node.h"
 
+#include <memory>
+
 namespace BT
 {
 
@@ -25,6 +27,8 @@ NodeStatus TimeoutNode::tick()
     }
   }
 
+  std::unique_lock<std::mutex> lk(timeout_mutex_);
+
   if(!timeout_started_)
   {
     timeout_started_ = true;
@@ -33,7 +37,15 @@ NodeStatus TimeoutNode::tick()
 
     if(msec_ > 0)
     {
-      timer_id_ = timer_.add(std::chrono::milliseconds(msec_), [this](bool aborted) {
+      // TimerQueue::cancel() cannot stop a handler that the worker thread
+      // already picked up: after the child completed (or a halt()) and a
+      // restart, the handler of the previous timer may still run, with
+      // aborted == false. Each handler therefore checks that it belongs to
+      // the current timer. Holding timeout_mutex_ across add() and the
+      // assignment of timer_id_ means the handler, which locks it too, can
+      // only compare after both are set.
+      auto id = std::make_shared<uint64_t>(0);
+      timer_id_ = timer_.add(std::chrono::milliseconds(msec_), [this, id](bool aborted) {
         // Return immediately if the timer was aborted.
         // This function could be invoked during destruction of this object and
         // we don't want to access member variables if not needed.
@@ -42,6 +54,12 @@ NodeStatus TimeoutNode::tick()
           return;
         }
         const std::unique_lock<std::mutex> lk(timeout_mutex_);
+        // halt() may have run between the timer firing and this lock: the
+        // child was already halted and may not exist anymore.
+        if(!timeout_started_ || *id != timer_id_)
+        {
+          return;
+        }
         if(child()->status() == NodeStatus::RUNNING)
         {
           child_halted_ = true;
@@ -49,10 +67,9 @@ NodeStatus TimeoutNode::tick()
           emitWakeUpSignal();
         }
       });
+      *id = timer_id_;
     }
   }
-
-  std::unique_lock<std::mutex> lk(timeout_mutex_);
 
   if(child_halted_)
   {
@@ -63,9 +80,8 @@ NodeStatus TimeoutNode::tick()
   if(isStatusCompleted(child_status))
   {
     timeout_started_ = false;
-    lk.unlock();
     timer_.cancel(timer_id_);
-    lk.lock();
+    timer_id_ = 0;
     resetChild();
   }
   return child_status;
@@ -73,8 +89,15 @@ NodeStatus TimeoutNode::tick()
 
 void TimeoutNode::halt()
 {
-  timeout_started_ = false;
-  timer_.cancelAll();
+  {
+    // The timer handler halts the child on the worker thread while holding
+    // this mutex: wait for it, and make a handler that fires later return
+    // before it touches the child.
+    const std::unique_lock<std::mutex> lk(timeout_mutex_);
+    timeout_started_ = false;
+    timer_.cancelAll();
+    timer_id_ = 0;
+  }
   DecoratorNode::halt();
 }
 

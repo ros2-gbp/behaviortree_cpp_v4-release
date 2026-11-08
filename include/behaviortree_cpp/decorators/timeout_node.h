@@ -58,7 +58,14 @@ public:
 
   ~TimeoutNode() override
   {
-    timer_.cancelAll();
+    {
+      const std::unique_lock<std::mutex> lk(timeout_mutex_);
+      timeout_started_ = false;
+    }
+    // Join the timer thread here, without holding timeout_mutex_ (the handler
+    // locks it): timer_ is the first member, so it is destroyed after
+    // timeout_mutex_ and timeout_started_.
+    timer_.stop();
   }
 
   TimeoutNode(const TimeoutNode&) = delete;
@@ -77,6 +84,7 @@ private:
 
   void halt() override;
 
+  // Member order is frozen for ABI compatibility: do not reorder.
   TimerQueue<> timer_;
   std::atomic_bool child_halted_ = false;
   uint64_t timer_id_;
